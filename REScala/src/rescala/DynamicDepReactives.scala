@@ -5,6 +5,8 @@ import rescala.events.Event
 import rescala.events.ChangedEventNode
 import rescala.events.EventNode
 
+import scala.concurrent.stm.{TxnLocal, Ref, atomic}
+
 //trait FixedDepHolder extends Reactive {
 //  val fixedDependents = new ListBuffer[Dependent]
 //  def addFixedDependent(dep: Dependent) = fixedDependents += dep
@@ -13,13 +15,15 @@ import rescala.events.EventNode
 //}
 
 /* A node that has nodes that depend on it */
-class VarSynt[T](private[this] var value: T) extends Var[T] {
+class VarSynt[T](value: T) extends Var[T] {
 
-  def get = value
+  private[this] val _value = Ref(value)
 
-  def set(newValue: T): Unit = {
-    if (value != newValue) {
-      value = newValue
+  def get = _value.single.get
+
+  def set(newValue: T): Unit = atomic { tx =>
+    val oldValue = _value.getAndTransform(_ => newValue)(tx)
+    if (oldValue != newValue) {
       TS.nextRound() // Testing
       logTestingTimestamp()
 
@@ -44,9 +48,9 @@ trait DependentSignalImplementation[+T] extends DependentSignal[T] {
   def initialValue(): T
   def calculateNewValue(): T
 
-  private[this] var currentValue = initialValue()
+  private[this] val currentValue = Ref(initialValue())
 
-  def get = currentValue
+  def get = currentValue.single.get
 
   def triggerReevaluation(): Unit = {
     ReactiveEngine.log.nodeEvaluationStarted(this)
@@ -68,14 +72,10 @@ trait DependentSignalImplementation[+T] extends DependentSignal[T] {
     }
     else {
       if (level <= oldLevel) {
+        val oldValue = currentValue.single.getAndTransform(_ => newValue)
         /* Notify dependents only of the value changed */
-        if (currentValue != newValue) {
-          currentValue = newValue
-          notifyDependents(currentValue)
-        }
-        else {
-          ReactiveEngine.log.nodePropagationStopped(this)
-        }
+        if (oldValue != newValue) { notifyDependents(newValue) }
+        else { ReactiveEngine.log.nodePropagationStopped(this) }
       } : Unit
     }
     ReactiveEngine.log.nodeEvaluationEnded(this)
@@ -86,19 +86,18 @@ trait DependentSignalImplementation[+T] extends DependentSignal[T] {
 
 /** A dependant reactive value with dynamic dependencies (depending signals can change during evaluation) */
 class SignalSynt[+T](reactivesDependsOnUpperBound: List[DepHolder])(expr: SignalSynt[T] => T)
-  extends { private var detectedDependencies = Set[DepHolder]() } with DependentSignalImplementation[T] {
+  extends { private val detectedDependencies = TxnLocal(Set[DepHolder]()) } with DependentSignalImplementation[T] {
 
-  override def onDynamicDependencyUse[A](dependency: Signal[A]): Unit = {
+  override def onDynamicDependencyUse[A](dependency: Signal[A]): Unit = atomic { tx =>
     super.onDynamicDependencyUse(dependency)
-    detectedDependencies += dependency
+    detectedDependencies.transform(_ + dependency)(tx)
   }
 
   override def initialValue(): T = calculateNewValue()
 
-  override def calculateNewValue(): T = {
+  override def calculateNewValue(): T = atomic { tx =>
     val newValue = expr(this)
-    setDependOn(detectedDependencies)
-    detectedDependencies = Set()
+    setDependOn(detectedDependencies.getAndTransform(_ => Set())(tx))
     newValue
   }
 

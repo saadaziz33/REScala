@@ -6,6 +6,8 @@ import rescala.log._
 import rescala.log.Logging
 import java.util.UUID
 
+import scala.concurrent.stm.{TxnLocal, Ref, atomic}
+
 /** A Reactive is a value type which has a dependency to other Reactives */
 trait Reactive {
   // testing
@@ -21,52 +23,53 @@ trait Reactive {
 
 /** A node that has nodes that depend on it */
 trait DepHolder extends Reactive {
-  private var dependents: Set[Dependent] = Set()
+  private val dependents: Ref[Set[Dependent]] = Ref(Set[Dependent]())
 
   /** used for testing*/
-  def dependentCount() = dependents.size
+  def dependentCount() = dependents.single.get.size
 
-  def addDependent(dep: Dependent) = {
-    if (!dependents.contains(dep)) {
-      dependents += dep
+  def addDependent(dep: Dependent) = atomic { tx =>
+    if (!dependents.get(tx).contains(dep)) {
+      dependents.transform(_ + dep)(tx)
       ReactiveEngine.log.nodeAttached(dep, this)
     }
   }
-  def removeDependent(dep: Dependent) = dependents -= dep
+  def removeDependent(dep: Dependent) = dependents.single.transform(_ - dep)
   def notifyDependents(change: Any): Unit = {
     ReactiveEngine.log.nodePulsed(this)
-    dependents.foreach(_.dependsOnchanged(change, this))
+    dependents.single.get.foreach(_.dependsOnchanged(change, this))
   }
 }
 
 /** A node that depends on other nodes */
 trait Dependent extends Reactive {
-  private var dependOn: Set[DepHolder] = Set()
+  private val dependOn: Ref[Set[DepHolder]] = Ref(Set[DepHolder]())
 
   /** for testing */
-  def dependOnCount() = dependOn.size
+  def dependOnCount() = dependOn.single.get.size
 
-  def addDependOn(dep: DepHolder) = {
-    if (!dependOn.contains(dep)) {
-      dependOn += dep
+  def addDependOn(dep: DepHolder) = atomic { tx =>
+    if (!dependOn.get(tx).contains(dep)) {
+      dependOn.transform(_ + dep)(tx)
       dep.addDependent(this)
       ReactiveEngine.log.nodeAttached(this, dep)
     }
   }
-  def setDependOn(deps: TraversableOnce[DepHolder]) = {
+  def setDependOn(deps: TraversableOnce[DepHolder]) = atomic { tx =>
     val newDependencies = deps.toSet
-    val removed = dependOn.diff(newDependencies)
-    val added = newDependencies.diff(dependOn)
+    val oldDependencies = dependOn.get(tx)
+    val removed = oldDependencies.diff(newDependencies)
+    val added = newDependencies.diff(oldDependencies)
     removed.foreach(removeDependOn)
     added.foreach(addDependOn)
-    dependOn = deps.toSet
+    dependOn.set(deps.toSet)(tx)
   }
   def removeDependOn(dep: DepHolder) = {
     dep.removeDependent(this)
-    dependOn -= dep
+    dependOn.single.transform(_ - dep)
   }
 
-  override def level: Int = if (dependOnCount() <= 0) 0 else dependOn.map(_.level).max + 1
+  override def level: Int = if (dependOnCount() <= 0) 0 else dependOn.single.get.map(_.level).max + 1
 
   /** called when it is this events turn to be evaluated
     * (head of the evaluation queue) */
@@ -187,22 +190,24 @@ object ReactiveEngine {
   /** If logging is needed, replace this with another instance of Logging */
   var log: Logging = NoLogging
 
-  private val evalQueue = new mutable.PriorityQueue[(Int, Dependent)]()(new Ordering[(Int, Dependent)] {
+  private object ReactiveOrdering extends Ordering[(Int, Dependent)] {
     override def compare(x: (Int, Dependent), y: (Int, Dependent)): Int = y._1.compareTo(x._1)
-  })
+  }
+
+  private val evalQueue = TxnLocal(new mutable.PriorityQueue[(Int, Dependent)]()(ReactiveOrdering))
 
   /** Adds a dependant to the eval queue, duplicates are allowed */
-  def addToEvalQueue(dep: Dependent): Unit = {
-      if (!evalQueue.exists { case (_, elem) => elem eq dep }) {
+  def addToEvalQueue(dep: Dependent): Unit = atomic { tx =>
+      if (!evalQueue.get(tx).exists { case (_, elem) => elem eq dep }) {
         ReactiveEngine.log.nodeScheduled(dep)
-        evalQueue.+=((dep.level, dep))
+        evalQueue.get(tx).+=((dep.level, dep))
       }
   }
 
   /** Evaluates all the elements in the queue */
-  def startEvaluation() = {
-    while (evalQueue.nonEmpty) {
-      val (level, head) = evalQueue.dequeue()
+  def startEvaluation() = atomic { tx =>
+    while (evalQueue.get(tx).nonEmpty) {
+      val (level, head) = evalQueue.get(tx).dequeue()
       // check the level if it changed queue again
       if (level == head.level) head.triggerReevaluation()
       else addToEvalQueue(head)

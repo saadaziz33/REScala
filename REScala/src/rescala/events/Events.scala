@@ -5,6 +5,7 @@ import rescala.events.EventNodeExcept.State
 import scala.collection.LinearSeq
 import rescala._
 
+import scala.concurrent.stm.{TxnLocal, Ref, atomic}
 
 
 trait Event[+T] extends DepHolder {
@@ -114,7 +115,7 @@ trait EventNode[T] extends Event[T] {
 class ImperativeEvent[T] extends EventNode[T] {
 
   /** Trigger the event */
-  def apply(v: T): Unit = {
+  def apply(v: T): Unit = atomic { tx =>
     TS.nextRound()
     logTestingTimestamp()
     notifyDependents(v)
@@ -131,8 +132,10 @@ class ImperativeEvent[T] extends EventNode[T] {
  */
 abstract class UnaryStoreTriggerNode[StoreType, TriggeredType, DependencyType <: DepHolder]
   (dependency: DependencyType,
-   private var storedValue: Option[StoreType] = None)
+   storedValue: Option[StoreType] = None)
   extends EventNode[TriggeredType] with DepHolder with Dependent {
+
+  private val storedValueRef = Ref(storedValue)
 
   addDependOn(dependency)
 
@@ -143,11 +146,11 @@ abstract class UnaryStoreTriggerNode[StoreType, TriggeredType, DependencyType <:
 
   def triggerReevaluation(): Unit = {
     logTestingTimestamp() // Testing
-    trigger(storedValue).foreach(notifyDependents)
+    trigger(storedValueRef.single.get).foreach(notifyDependents)
   }
 
   override def dependsOnchanged(change: Any,dep: DepHolder) = {
-    storedValue = store(storedValue, change)
+    storedValueRef.single.transform(store(_, change))
     ReactiveEngine.addToEvalQueue(this)
   }
   
@@ -164,7 +167,7 @@ abstract class BinaryStoreTriggerNode[StoreType, TriggeredType, T1, T2]
    resetState: => Option[StoreType] = None)
   extends EventNode[TriggeredType] with DepHolder with Dependent {
 
-  private var storedValue: Option[StoreType] = resetState
+  private val storedValue: TxnLocal[Option[StoreType]] = TxnLocal(resetState)
 
   addDependOn(dependencyA)
   addDependOn(dependencyB)
@@ -176,18 +179,17 @@ abstract class BinaryStoreTriggerNode[StoreType, TriggeredType, T1, T2]
   /** updates the stored state on changes of the second Event */
   def storeB(stored: Option[StoreType], change: T2): Option[StoreType]
 
-  def triggerReevaluation(): Unit = {
+  def triggerReevaluation(): Unit = atomic { tx =>
     logTestingTimestamp() // Testing
-    trigger(storedValue).foreach(notifyDependents)
-    storedValue = resetState
+    trigger(storedValue.get(tx)).foreach(notifyDependents)
   }
 
-  override def dependsOnchanged(change: Any, dep: DepHolder) = {
+  override def dependsOnchanged(change: Any, dep: DepHolder) = atomic { tx =>
     if (dep eq dependencyA) {
-      storedValue = storeA(storedValue, change.asInstanceOf[T1])
+      storedValue.transform(storeA(_, change.asInstanceOf[T1]))(tx)
     }
     else if (dep eq dependencyB) {
-      storedValue = storeB(storedValue, change.asInstanceOf[T2])
+      storedValue.transform(storeB(_, change.asInstanceOf[T2]))(tx)
     }
     else {
       throw new IllegalStateException(s"illegal dependency $dep")

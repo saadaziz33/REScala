@@ -4,6 +4,7 @@ import rescala.events._
 import rescala.log._
 import scala.collection.immutable.Queue
 import scala.collection.LinearSeq
+import scala.concurrent.stm.{TxnLocal, Ref, atomic}
 
 object IFunctions {
 
@@ -119,14 +120,14 @@ class FoldedSignal[+T, +E](e: Event[E], init: T, f: (T, E) => T)
   addDependOn(e)
 
   // The cached value of the last occurence of e
-  private[this] var lastEvent: E = _
+  private[this] val lastEvent: TxnLocal[E] = TxnLocal[E]()
 
   override def initialValue(): T = init
-  override def calculateNewValue(): T = f(get, lastEvent)
+  override def calculateNewValue(): T = atomic { tx => f(get, lastEvent.get(tx)) }
 
-  override def dependsOnchanged(change: Any, dep: DepHolder) = {
+  override def dependsOnchanged(change: Any, dep: DepHolder) = atomic { tx =>
     if (dep eq e) {
-      lastEvent = change.asInstanceOf[E]
+      lastEvent.set(change.asInstanceOf[E])(tx)
     } else {
       // this would be an implementation error
       throw new RuntimeException("Folded Signals can only depend on a single event node")
