@@ -8,6 +8,7 @@ import scala.concurrent.duration._
 import scala.concurrent.Await
 import java.util.concurrent.TimeoutException
 import scala.concurrent.ExecutionContext.Implicits._
+import scala.util.Random
 
 
 // ===================== FORK IMPLEMENTATION =====================
@@ -89,9 +90,9 @@ object Philosophers extends App {
   // create forks
   val fork = for (i <- 0 until sizeOfTable) yield new Fork(i)
   // create and run philosophers
-  val philosopher = for (i <- 0 until sizeOfTable) yield new Philosopher(i)
+  val philosophers = for (i <- 0 until sizeOfTable) yield new Philosopher(i)
   // connect philosophers with forks
-  philosopher.foreach { phil =>
+  philosophers.foreach { phil =>
     atomic { implicit tx =>
       phil.addFork(fork(phil.id))
       phil.addFork(fork((phil.id + 1) % 3))
@@ -120,7 +121,7 @@ object Philosophers extends App {
 
   // ---- table state observation ----
   atomic { implicit tx =>
-    val eatingStates: IndexedSeq[Signal[(Boolean, Philosopher)]] = philosopher.map(p => p.isEating.map(_ -> p))
+    val eatingStates: IndexedSeq[Signal[(Boolean, Philosopher)]] = philosophers.map(p => p.isEating.map(_ -> p))
     val allEating = SignalSynt[IndexedSeq[Philosopher]]() { s => eatingStates.map(_.apply(s)).collect { case (true, phil) => phil } }
     allEating.changed += (eating => log("Now eating: " + eating))
   }
@@ -129,16 +130,23 @@ object Philosophers extends App {
   // start simulation
   @volatile private var killed = false
   println("Starting simulation. Press <Enter> to terminate!")
-  val threads = philosopher.map { phil =>
-    phil ->
-      Future {
-        Thread.currentThread().setName("p" + phil.id)
-        println(phil + ": using " + phil.forks.get + " on thread" + Thread.currentThread().getName)
-        while (!killed) {
-          phil.eatOnce()
+  println(philosophers)
+  val threads = philosophers.map { phil =>
+    phil -> {
+      val thread = new Thread {
+        override def run(): Unit = {
+          Thread.currentThread().setName("p" + phil.id)
+          println(phil + ": using " + phil.forks.get + " on thread" + Thread.currentThread().getName)
+          while (!killed) {
+            //Thread.sleep(Random.nextInt(500))
+            phil.eatOnce()
+          }
+          log(phil + " dies.")
         }
-        log(phil + " dies.")
       }
+      thread.start()
+      thread
+    }
   }
 
   // ===================== SHUTDOWN =====================
@@ -152,8 +160,7 @@ object Philosophers extends App {
   // collect forked threads to check termination
   threads.foreach {
     case (phil, thread) => try {
-      import scala.language.postfixOps
-      Await.ready(thread, 50 millis)
+      thread.join()
       log(phil + " terminated.")
     } catch {
       case te: TimeoutException => log(phil + " failed to terminate!")
