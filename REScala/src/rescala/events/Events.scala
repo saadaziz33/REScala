@@ -5,7 +5,7 @@ import rescala.events.EventNodeExcept.State
 import scala.collection.LinearSeq
 import rescala._
 
-import scala.concurrent.stm.{TxnLocal, Ref, atomic}
+import scala.concurrent.stm.{Txn, TxnLocal, Ref, atomic}
 
 
 trait Event[+T] extends DepHolder {
@@ -96,7 +96,9 @@ trait Event[+T] extends DepHolder {
  * Wrapper for an anonymous function
  */
 case class EventHandler[T](fun: T => Unit) extends Dependent {
-  override def dependsOnchanged(change: Any, dep: DepHolder): Unit = fun(change.asInstanceOf[T])
+  override def dependsOnchanged(change: Any, dep: DepHolder): Unit = atomic { tx =>
+    Txn.afterCommit(_ => fun(change.asInstanceOf[T]))(tx)
+  }
   def triggerReevaluation() = {}
 }
 
