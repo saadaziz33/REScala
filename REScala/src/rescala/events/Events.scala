@@ -184,6 +184,8 @@ abstract class BinaryStoreTriggerNode[StoreType, TriggeredType, T1, T2]
   def triggerReevaluation(): Unit = atomic { tx =>
     logTestingTimestamp() // Testing
     trigger(storedValue.get(tx)).foreach(notifyDependents)
+    //reset transaction local state in case of multiple turns in this transaction
+    storedValue.set(resetState)(tx)
   }
 
   override def dependsOnchanged(change: Any, dep: DepHolder) = atomic { tx =>
