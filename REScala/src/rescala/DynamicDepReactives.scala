@@ -27,7 +27,7 @@ class VarSynt[T](value: T) extends Var[T] {
       TS.nextRound() // Testing
       logTestingTimestamp()
 
-      notifyDependents(value)
+      notifyDependents(newValue)
       ReactiveEngine.startEvaluation()
 
     } else {
