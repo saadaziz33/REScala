@@ -1,10 +1,10 @@
 package rescala
 
-import scala.collection.mutable
 import rescala.events._
 import rescala.log._
 import rescala.log.Logging
 import java.util.UUID
+import scala.collection.immutable.SortedSet
 
 import scala.concurrent.stm.{TxnLocal, Ref, atomic}
 
@@ -191,30 +191,33 @@ object ReactiveEngine {
   var log: Logging = NoLogging
 
   private object ReactiveOrdering extends Ordering[(Int, Dependent)] {
-    override def compare(x: (Int, Dependent), y: (Int, Dependent)): Int = y._1.compareTo(x._1)
+    override def compare(x: (Int, Dependent), y: (Int, Dependent)): Int = {
+      val p1 = y._1.compareTo(x._1)
+      if (p1 != 0) p1
+      else System.identityHashCode(y._2).compareTo(System.identityHashCode(x._2))
+    }
   }
 
-  private val evalQueue = TxnLocal(new mutable.PriorityQueue[(Int, Dependent)]()(ReactiveOrdering))
+  private val evalQueue = TxnLocal(SortedSet[(Int, Dependent)]()(ReactiveOrdering))
 
   /** Adds a dependant to the eval queue, duplicates are allowed */
   def addToEvalQueue(dep: Dependent): Unit = atomic { tx =>
       if (!evalQueue.get(tx).exists { case (_, elem) => elem eq dep }) {
         ReactiveEngine.log.nodeScheduled(dep)
-        evalQueue.get(tx).+=((dep.level, dep))
+        evalQueue.transform(_ + ((dep.level, dep)))(tx)
       }
   }
 
   /** Evaluates all the elements in the queue */
   def startEvaluation() = atomic { tx =>
     while (evalQueue.get(tx).nonEmpty) {
-      val (level, head) = evalQueue.get(tx).dequeue()
+      val (level, head) = evalQueue.getAndTransform(_.tail)(tx).head
       // check the level if it changed queue again
       if (level == head.level) head.triggerReevaluation()
       else addToEvalQueue(head)
     }
   }
 }
-
 // TODO: check the use of these classes. Originally was only for testing
 sealed case class Stamp(roundNum: Int, sequenceNum: Int)
 
