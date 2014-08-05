@@ -125,23 +125,23 @@ object SignalSynt {
 /** A wrapped event inside a signal, that gets "flattened" to a plain event node */
 class WrappedEvent[T](wrapper: Signal[Event[T]]) extends EventNode[T] with Dependent {
   
-  var currentValue: T = _
+  val currentValue: TxnLocal[T] = TxnLocal[T]()
   
   updateDependencies()
 
   private def updateDependencies() = setDependOn(Set(wrapper, wrapper.get))
 
-  def triggerReevaluation() {
+  def triggerReevaluation() = atomic { tx =>
     logTestingTimestamp()
-    notifyDependents(currentValue)
+    notifyDependents(currentValue.get(tx))
   }
   
   override def dependsOnchanged(change: Any, dep: DepHolder) = {
     if(dep eq wrapper) {
 	    updateDependencies()
     }
-    else if(dep eq wrapper.get) {
-      currentValue = change.asInstanceOf[T]
+    else if(dep eq wrapper.get) atomic { tx =>
+      currentValue.set(change.asInstanceOf[T])(tx)
     	ReactiveEngine.addToEvalQueue(this)
     }
     else throw new IllegalStateException("Illegal DepHolder " + dep)
