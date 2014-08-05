@@ -47,11 +47,7 @@ case class RetryPhilosopher(id: Int) {
   val state: Var[State] = Var(Thinking)
 
   // auto-release forks whenever eating successfully
-  state.changed.filter(_ == Eating) += { _ =>
-    Future {
-      state() = Thinking
-    }
-  }
+  state.changed.filter(_ == Eating) += { _ => state() = Thinking }
 
   // intermediate
   val request = state.map {
@@ -70,12 +66,13 @@ case class RetryPhilosopher(id: Int) {
   def eatOnce() = {
     // Variant 1: try new transaction until one succeeds
     while (try {
+      RetryPhilosophers.log(state.get.toString)
       state() = Eating
       false
     } catch {
       case e: RetryFork.MultipleRequestsException =>
         RetryPhilosophers.log(s"Multiple request exception")
-        false
+        true
     }) {}
 
     // Variant 2: rollback update transaction until it succeeds
@@ -156,7 +153,7 @@ object RetryPhilosophers extends App {
           log(phil + " dies.")
         }
       }
-    thread.start()
+      thread.start()
       thread
     }
 
