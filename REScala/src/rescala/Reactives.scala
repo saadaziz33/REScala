@@ -15,8 +15,10 @@ trait Reactive {
   /** for compatibility reasons with existing tests */
   def timestamps: List[Stamp] = _timestamps
   def logTestingTimestamp() = _timestamps = TS.newTs :: _timestamps
-  
-  def level: Int = 0
+
+  private val _level = Ref(0)
+  def ensureLevel(testLevel: Int): Unit = _level.single.transform { currentLevel => if (testLevel >= currentLevel) testLevel + 1 else currentLevel }
+  def level: Int = _level.single.get
 
   ReactiveEngine.log.nodeCreated(this)
 }
@@ -39,6 +41,13 @@ trait DepHolder extends Reactive {
     ReactiveEngine.log.nodePulsed(this)
     dependents.single.get.foreach(_.dependsOnchanged(change, this))
   }
+
+  override def ensureLevel(testLevel: Int): Unit = atomic { tx =>
+    val oldLevel = level
+    super.ensureLevel(testLevel)
+    val newLevel = level
+    if (oldLevel < newLevel) dependents.get(tx).foreach(_.ensureLevel(newLevel))
+  }
 }
 
 /** A node that depends on other nodes */
@@ -50,6 +59,7 @@ trait Dependent extends Reactive {
 
   def addDependOn(dep: DepHolder) = atomic { tx =>
     if (!dependOn.get(tx).contains(dep)) {
+      ensureLevel(dep.level)
       dependOn.transform(_ + dep)(tx)
       dep.addDependent(this)
       ReactiveEngine.log.nodeAttached(this, dep)
@@ -68,8 +78,6 @@ trait Dependent extends Reactive {
     dep.removeDependent(this)
     dependOn.single.transform(_ - dep)
   }
-
-  override def level: Int = if (dependOnCount() <= 0) 0 else dependOn.single.get.map(_.level).max + 1
 
   /** called when it is this events turn to be evaluated
     * (head of the evaluation queue) */
@@ -192,9 +200,9 @@ object ReactiveEngine {
 
   private object ReactiveOrdering extends Ordering[(Int, Dependent)] {
     override def compare(x: (Int, Dependent), y: (Int, Dependent)): Int = {
-      val p1 = y._1.compareTo(x._1)
+      val p1 = x._1.compareTo(y._1)
       if (p1 != 0) p1
-      else System.identityHashCode(y._2).compareTo(System.identityHashCode(x._2))
+      else System.identityHashCode(x._2).compareTo(System.identityHashCode(y._2))
     }
   }
 
