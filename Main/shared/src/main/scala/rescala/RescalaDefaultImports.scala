@@ -16,7 +16,7 @@ trait RescalaDefaultImports[S <: Struct] {
   final type Var[A] = reactives.Var[A, S]
   final type Evt[A] = reactives.Evt[A, S]
   final type Turn = propagation.Turn[S]
-  final type ReevaluationTicket = propagation.ReevaluationTicket[S]
+  final type ReevaluationTicket = propagation.DynamicReevaluationTicket[S]
   final type TurnSource = rescala.engine.TurnSource[S]
   final type Reactive = rescala.graph.Reactive[S]
   final def Evt[A](): Evt[A] = reactives.Evt[A, S]()

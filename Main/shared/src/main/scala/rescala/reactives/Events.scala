@@ -3,7 +3,7 @@ package rescala.reactives
 import rescala.engine.TurnSource
 import rescala.graph.Pulse.NoChange
 import rescala.graph._
-import rescala.propagation.{Turn, ReevaluationTicket}
+import rescala.propagation.{Turn, DynamicReevaluationTicket}
 
 object Events {
 
@@ -13,9 +13,9 @@ object Events {
     override def calculatePulse()(implicit turn: Turn[S]): Pulse[T] = Pulse.tryCatch(expr(turn), onEmpty = NoChange)
   }
 
-  private class DynamicEvent[T, S <: Struct](_bud: S#StructType[T, Reactive[S]], expr: ReevaluationTicket[S] => Pulse[T]) extends Base[T, S](_bud) with Event[T, S] with DynamicReevaluation[T, S] {
+  private class DynamicEvent[T, S <: Struct](_bud: S#StructType[T, Reactive[S]], expr: DynamicReevaluationTicket[S] => Pulse[T]) extends Base[T, S](_bud) with Event[T, S] with DynamicReevaluation[T, S] {
     def calculatePulseDependencies(implicit turn: Turn[S]): (Pulse[T], Set[Reactive[S]]) = {
-      val ticket = new ReevaluationTicket(turn, this)
+      val ticket = new DynamicReevaluationTicket(turn, this)
       val result = Pulse.tryCatch(expr(ticket), onEmpty = NoChange)
       (result, ticket.collectedDependencies)
     }
@@ -30,7 +30,7 @@ object Events {
   }
 
   /** create dynamic events */
-  def dynamic[T, S <: Struct](dependencies: Reactive[S]*)(expr: ReevaluationTicket[S] => Option[T])(implicit ticket: TurnSource[S]): Event[T, S] = {
+  def dynamic[T, S <: Struct](dependencies: Reactive[S]*)(expr: DynamicReevaluationTicket[S] => Option[T])(implicit ticket: TurnSource[S]): Event[T, S] = {
     ticket { initialTurn =>
       initialTurn.create(dependencies.toSet, dynamic = true)(
         new DynamicEvent[T, S](initialTurn.makeStructState(transient = true), expr.andThen(Pulse.fromOption)))

@@ -1,53 +1,36 @@
 package rescala.graph
 
+import rescala.graph.RPValueWrappers.{PersistentValue, TransientPulse}
 import rescala.propagation.Turn
 
 import scala.language.{existentials, higherKinds, implicitConversions}
 
-/**
-  * Wrapper that adds a level of indirection for classes having a struct type dependency.
- */
-trait Struct {
-  /**
-    * Spore type defined by this struct
-    *
-    * @tparam P Pulse stored value type
-    * @tparam R Reactive value type represented by the struct
-    */
-  type StructType[P, R] <: PulseStruct[P] with ReadGraphStruct[R]
+trait ReevaluationStruct[D, R] {
+  def reevDone(turn: Turn[_], value: D): Unit
 }
 
-/**
-  * Wrapper for a struct type combining GraphSpore and PulsingSpore
-  */
-trait ChangableGraphStruct extends Struct {
-  override type StructType[P, R] <: GraphStruct[R] with PulseStruct[P]
+trait PersistentReevaluationStruct[P, R] extends ReevaluationStruct[PersistentValue[P], R] {
+  def reevIn(turn: Turn[_]): (PersistentValue[P], Set[R])
 }
 
-/**
-  * Spore that has a buffered pulse indicating a potential update and storing the updated and the old value.
-  * Through the buffer, it is possible to either revert or apply the update
-  *
-  * @tparam P Pulse stored value type
-  */
-trait PulseStruct[P] {
-  def set(value: Pulse[P])(implicit turn: Turn[_]): Unit
-  def base(implicit turn: Turn[_]): Pulse[P]
-  def get(implicit turn: Turn[_]): Pulse[P]
+trait TransientReevaluationStruct[P, R] extends ReevaluationStruct[TransientPulse[P], R] {
+  def reevIn(turn: Turn[_]): Set[R]
 }
 
-trait ReadGraphStruct[R] {
-  def incoming(implicit turn: Turn[_]): Set[R]
+
+trait PropagationStruct[R] {
+  def reevOut(turn: Turn[_]): Set[R]
 }
 
-/**
-  * Spore that can represent a node in a graph by providing information about incoming and outgoing edges.
-  *
-  * @tparam R Type of the reactive values that are connected to this struct
-  */
-trait GraphStruct[R] extends ReadGraphStruct[R] {
-  def updateIncoming(reactives: Set[R])(implicit turn: Turn[_]): Unit
-  def outgoing(implicit turn: Turn[_]): Iterator[R]
-  def discover(reactive: R)(implicit turn: Turn[_]): Unit
-  def drop(reactive: R)(implicit turn: Turn[_]): Unit
+trait AccessStruct[D <: Unwrap[_, _], R] {
+  def now(turn: Turn[_]): D
+  def after(turn: Turn[_]): D
+  def regRead(turn: Turn[_]): D
+  def drop(turn: Turn[_], remove: R): Unit
+  def discover(turn: Turn[_], add: R): D
 }
+
+trait PersistentAccessStruct[P, R] extends AccessStruct[PersistentValue[P], R] {
+  def before(turn: Turn[_]): PersistentValue[P]
+}
+trait TransientAccessStruct[P, R] extends AccessStruct[TransientPulse[P], R]

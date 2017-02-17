@@ -6,7 +6,7 @@ import rescala.propagation.Turn
 /**
   * Indicator for the result of a re-evaluation of a reactive value.
   */
-sealed trait ReevaluationResult[S <: Struct]
+sealed trait ReevaluationResult[+R]
 
 object ReevaluationResult {
 
@@ -17,7 +17,7 @@ object ReevaluationResult {
     *                values is necessary.
     * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
     */
-  case class Static[S <: Struct](changed: Boolean) extends ReevaluationResult[S]
+  case class Static(changed: Boolean) extends ReevaluationResult[Nothing]
 
   /**
     * Result of the dynamic re-evaluation of a reactive value.
@@ -28,7 +28,7 @@ object ReevaluationResult {
     * @param diff    List of reactive values this value depends on that have been removed or added through the re-evaluation
     * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
     */
-  case class Dynamic[S <: Struct](changed: Boolean, diff: DepDiff[S]) extends ReevaluationResult[S]
+  case class Dynamic[R](changed: Boolean, diff: DepDiff[R]) extends ReevaluationResult[R]
 }
 
 /**
@@ -38,7 +38,7 @@ object ReevaluationResult {
   * @param old   Set of dependencies before re-evaluation
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
-case class DepDiff[S <: Struct](novel: Set[Reactive[S]], old: Set[Reactive[S]]) {
+case class DepDiff[R](novel: Set[Reactive[R]], old: Set[Reactive[R]]) {
   lazy val added = novel.diff(old)
   lazy val removed = old.diff(novel)
 }
@@ -89,24 +89,23 @@ trait DynamicReevaluation[+P, S <: Struct] extends Disconnectable[S] {
   }
 }
 
-trait Disconnectable[S <: Struct] {
-  this: Reactive[S] =>
+trait Disconnectable[R] {
+  this: Reactive[R] =>
 
   @volatile private var disconnected = false
 
-  final def disconnect()(implicit engine: Engine[S, Turn[S]]): Unit = {
+  final def disconnect()(implicit engine: Engine[R, Turn[R]]): Unit = {
     engine.plan(this) { turn =>
       disconnected = true
     }
   }
 
-  protected[rescala] def computeReevaluationResult()(implicit turn: Turn[S]): ReevaluationResult[S]
+  protected[rescala] def computeReevaluationResult()(implicit turn: Turn[R]): ReevaluationResult[R]
 
-  final override protected[rescala] def reevaluate()(implicit turn: Turn[S]): ReevaluationResult[S] = {
+  final override protected[rescala] def reevaluate()(implicit turn: Turn[R]): ReevaluationResult[R] = {
     if (disconnected) {
       ReevaluationResult.Dynamic(changed = false, DepDiff(novel = Set.empty, old = state.incoming))
-    }
-    else {
+    } else {
       computeReevaluationResult()
     }
   }

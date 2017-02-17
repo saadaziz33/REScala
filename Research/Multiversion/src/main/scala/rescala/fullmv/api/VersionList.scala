@@ -32,7 +32,7 @@ case class FramingBranchOutSuperseding(out: Set[O], supersede: Transaction) exte
 }
 
 class Version[V](val txn: Transaction, var out: Set[O], var pending: Int, var changed: Int, var value: Option[V]) {
-  def isWritten: Boolean = value.isDefined
+  def isWritten: Boolean = changed == 0 && value.isDefined
   def isFrame: Boolean = pending > 0 || (changed > 0 && !isWritten)
   def isWrite: Boolean = pending > 0 || changed > 0 || isWritten
   def isReadOrDynamic: Boolean = !isWrite
@@ -311,14 +311,14 @@ class SignalVersionList[V](val host: Host, init: Transaction, initialValue: V, v
     // do reevaluation
     val newValue = userComputation(ReevaluationTicket(version.txn, this), latestValue)
     val selfChanged = latestValue != newValue
+    if (selfChanged) {
+      version.value = Some(newValue)
+      latestValue = newValue
+    }
 
     // update version and search for successor framing and possibly reevaluation
     val notification = synchronized {
       version.changed = 0
-      if (selfChanged) {
-        version.value = Some(newValue)
-        latestValue = newValue
-      }
       firstFrame += 1
       frameRemoved(version.txn)
       progressToNextWriteForNotification(version.out, version.txn, selfChanged)

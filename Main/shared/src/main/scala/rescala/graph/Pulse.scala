@@ -1,29 +1,12 @@
 package rescala.graph
 
-import rescala.graph.Pulse.{Change, Exceptional, NoChange}
 import rescala.reactives.RExceptions.EmptySignalControlThrowable
+import tests.rescala.EmptySignalTestSuite
 
-import scala.util.control.NonFatal
 import scala.util.{Failure, Success, Try}
 
-/**
-  * Pulse that stores a current value and can also indicate a potentially change to an updated value.
-  * A pulse may indicate that no current value has been set yet but updates must always contain a value.
-  *
-  * @tparam P Stored value type of the Pulse
-  */
-sealed trait Pulse[+P] {
-
-  /**
-    * Checks if the pulse indicates a change
-    *
-    * @return True if the pulse indicates a change, false if not
-    */
-  final def isChange: Boolean = this match {
-    case NoChange => false
-    case _ => true
-  }
-
+private sealed trait RPValueWrapper[+W] {
+  self: Unwrap[W, _] =>
   /**
     * If the pulse indicates a change: Applies a function to the updated value of the pulse and returns a new pulse
     * indicating a change to this updated value.
@@ -33,10 +16,10 @@ sealed trait Pulse[+P] {
     * @tparam Q Result type of the applied function
     * @return Pulse indicating the update performed by the applied function or an empty pulse if there is no updated value
     */
-  def map[Q](f: P => Q): Pulse[Q] = this match {
-    case Change(value) => Change(f(value))
-    case NoChange => NoChange
-    case ex@Exceptional(_) => ex
+  def map[Q](f: W => Q): RPValueWrapper[Q] = this match {
+    case ValueWrapper(value) => Change(f(value))
+    case NoValue => NoChange
+    case ex@ExceptionWrapper(_) => ex
   }
 
   /**
@@ -48,10 +31,10 @@ sealed trait Pulse[+P] {
     * @tparam Q Value type of the pulse returned by the applied function
     * @return Pulse returned by the applied function or an empty pulse if there is no updated value
     */
-  def flatMap[Q](f: P => Pulse[Q]): Pulse[Q] = this match {
-    case Change(value) => f(value)
-    case NoChange => NoChange
-    case ex@Exceptional(_) => ex
+  def flatMap[Q](f: W => RPValueWrapper[Q]): RPValueWrapper[Q] = this match {
+    case ValueWrapper(value) => f(value)
+    case NoValue => NoChange
+    case ex@ExceptionWrapper(_) => ex
   }
 
   /**
@@ -62,74 +45,47 @@ sealed trait Pulse[+P] {
     * @param p Filter function to be applied to the updated pulse value
     * @return A pulse with the updated pulse value if the filter function returns true, an empty pulse otherwise
     */
-  def filter(p: P => Boolean): Pulse[P] = this match {
-    case c@Change(value) if p(value) => c
-    case Change(_) => NoChange
-    case NoChange => NoChange
-    case ex@Exceptional(_) => ex
+  def filter(p: W => Boolean): RPValueWrapper[W] = this match {
+    case c@ValueWrapper(value) if p(value) => c
+    case ValueWrapper(_) => NoChange
+    case NoValue => NoChange
+    case ex@ExceptionWrapper(_) => ex
   }
 
   /** converts the pulse to an option of try */
-  def toOptionTry: Option[Try[P]] = this match {
-    case Change(up) => Some(Success(up))
-    case NoChange => None
-    case Pulse.empty => None
-    case Exceptional(t) => Some(Failure(t))
-  }
-
-  def getE: Option[P] = this match {
-    case Change(update) => Some(update)
-    case NoChange => None
-    case Exceptional(t) => throw t
-  }
-
-  def getS: P = this match {
-    case Change(value) => value
-    case Exceptional(t) => throw t
-    case NoChange => throw new IllegalStateException("NoChange used as Signal value")
+  def toOptionTry: Option[Try[W]] = this match {
+    case ValueWrapper(up) => Some(Success(up))
+    case NoValue => None
+    case ExceptionWrapper(t) => Some(Failure(t))
   }
 }
 
+case object NoValue extends RPValueWrapper[Nothing]
+case class ValueWrapper[P](value: P) extends RPValueWrapper[P]
+case class ExceptionWrapper(throwable: Throwable) extends RPValueWrapper[Nothing]
 
-/** Object containing utility functions for using pulses */
-object Pulse {
-  /**
-    * Transforms an optional value into a pulse. If the option doesn't contain a value, an empty pulse indicating no
-    * change is returned. Otherwise, a pulse with the option's value set as updated value is returned.
-    *
-    * @param opt Option to transform into a pulse
-    * @tparam P Value type of both option and returned pulse
-    * @return Pulse with the option's value set as updated value, or an empty pulse if the option doesn't have a value.
-    */
-  def fromOption[P](opt: Option[P]): Pulse[P] = opt.fold[Pulse[P]](NoChange)(Change.apply)
+trait Unwrap[W, U] {
+  self: ValueWrapper[W] =>
+  def get: U
+}
 
-  /** Transforms the given pulse and an updated value into a pulse indicating a change from the pulse's value to
-    * the given updated value. */
-  def diffPulse[P](newValue: P, oldPulse: Pulse[P]): Pulse[P] = oldPulse match {
-    case NoChange => Change(newValue)
-    case Change(oldValue) =>
-      if (newValue == oldValue) NoChange
-      else Change(newValue)
-    case ex@Exceptional(t) => Change(newValue)
+trait PersistentUnwrap[V] extends Unwrap[V, V] {
+  override def get: V = this match {
+    case ValueWrapper(up) => up
+    case NoValue => throw EmptySignalControlThrowable
+    case ExceptionWrapper(t) => throw t
   }
+}
 
-  /** wrap a pulse generating function to store everntual exceptions into an exceptional pulse */
-  def tryCatch[P](f: => Pulse[P], onEmpty: Pulse[P] = Pulse.empty): Pulse[P] = try f catch {
-    case EmptySignalControlThrowable => onEmpty
-    case NonFatal(t) => Exceptional(t)
+trait TransientUnwrap[P] extends Unwrap[P, Option[P]] {
+  override def get: Option[P] = this match {
+    case ValueWrapper(up) => Some(up)
+    case NoValue => None
+    case ExceptionWrapper(t) => throw t
   }
+}
 
-  /** the pulse representing an empty signal */
-  val empty = Exceptional(EmptySignalControlThrowable)
-
-  /** Pulse indicating no change */
-  case object NoChange extends Pulse[Nothing]
-
-  /** Pulse indicating a change
-    *
-    * @param update Updated value stored by the pulse */
-  final case class Change[+P](update: P) extends Pulse[P]
-
-  /** Pulse indicating an exception */
-  final case class Exceptional(throwable: Throwable) extends Pulse[Nothing]
+object RPValueWrappers {
+  type PersistentValue[V] = RPValueWrapper[V] with PersistentUnwrap[V]
+  type TransientPulse[P] = RPValueWrapper[P] with TransientUnwrap[P]
 }
