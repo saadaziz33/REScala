@@ -13,7 +13,7 @@ trait StaticReevaluationTicket[R] extends ReevaluationTicket[R] {
 }
 
 class DynamicReevaluationTicket[R](override val turn: Turn[R], val issuer: Reactive[R]) extends ReevaluationTicket[R] {
-  private[rescala] var collectedDependencies: Set[Reactive[R]] = Set.empty
+  private[rescala] var collectedDependencies: Set[AccessibleNode[_, _, R]] = Set.empty
 
   def depend[A](accessibleNode: AccessibleNode[A, _, R]): A = {
     if(issuer.incoming.contains(accessibleNode) || collectedDependencies.contains(accessibleNode)) {

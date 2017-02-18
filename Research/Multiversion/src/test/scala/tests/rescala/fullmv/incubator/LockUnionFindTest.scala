@@ -1,14 +1,11 @@
-package tests.rescala.fullmv
+package tests.rescala.fullmv.incubator
 
-import org.scalatest.FlatSpec
-import org.scalatest.Matchers
-import rescala.fullmv.Transaction
-import org.scalatest.Ignore
-import org.scalatest.Tag
-import org.scalatest.words.ResultOfStringPassedToVerb
+import org.scalatest.{FlatSpec, Matchers}
+import rescala.fullmv.incubator.Transaction
+import tests.rescala.fullmv.TestWithRemoteHost
 
 class LockUnionFindTest extends FlatSpec with Matchers with TestWithRemoteHost {
-  
+
   def twoNodeTest(a: Transaction, b: Transaction): Unit = {
     a.lock() should be(a)
     a.tryLock() should be(None)

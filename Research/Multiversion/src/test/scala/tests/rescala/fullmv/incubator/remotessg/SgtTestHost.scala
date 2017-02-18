@@ -1,4 +1,4 @@
-package tests.rescala.fullmv.remotessg
+package tests.rescala.fullmv.incubator.remotessg
 
 import java.rmi.registry.LocateRegistry
 import java.rmi.server.UnicastRemoteObject

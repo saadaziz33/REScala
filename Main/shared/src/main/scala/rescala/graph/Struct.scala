@@ -5,29 +5,27 @@ import rescala.propagation.Turn
 
 import scala.language.{existentials, higherKinds, implicitConversions}
 
-trait ReevaluationStruct[D, R] {
-  def reevDone(turn: Turn[_], value: D): Unit
+trait PersistentReevaluationStruct[V, R] {
+  def reevDone(turn: Turn[_], value: Option[PersistentValue[V]], incomings: Set[Reactive[R]]): Unit
+  def reevIn(turn: Turn[_]): (PersistentValue[V], Set[Reactive[R]])
 }
 
-trait PersistentReevaluationStruct[P, R] extends ReevaluationStruct[PersistentValue[P], R] {
-  def reevIn(turn: Turn[_]): (PersistentValue[P], Set[R])
-}
-
-trait TransientReevaluationStruct[P, R] extends ReevaluationStruct[TransientPulse[P], R] {
-  def reevIn(turn: Turn[_]): Set[R]
+trait TransientReevaluationStruct[P, R] {
+  def reevDone(turn: Turn[_], value: TransientPulse[P], incomings: Set[Reactive[R]]): Unit
+  def reevIn(turn: Turn[_]): Set[Reactive[R]]
 }
 
 
-trait PropagationStruct[R] {
-  def reevOut(turn: Turn[_]): Set[R]
+trait SimplePropagationStruct[R] {
+  def reevOut(turn: Turn[_]): Set[Reactive[R]]
 }
 
 trait AccessStruct[D <: Unwrap[_, _], R] {
   def now(turn: Turn[_]): D
   def after(turn: Turn[_]): D
   def regRead(turn: Turn[_]): D
-  def drop(turn: Turn[_], remove: R): Unit
-  def discover(turn: Turn[_], add: R): D
+  def drop(turn: Turn[_], remove: Reactive[R]): Unit
+  def discover(turn: Turn[_], add: Reactive[R]): D
 }
 
 trait PersistentAccessStruct[P, R] extends AccessStruct[PersistentValue[P], R] {

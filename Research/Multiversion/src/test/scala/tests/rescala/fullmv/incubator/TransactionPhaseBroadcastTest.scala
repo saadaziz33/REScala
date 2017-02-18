@@ -1,8 +1,8 @@
-package tests.rescala.fullmv
+package tests.rescala.fullmv.incubator
 
-import org.scalatest.FlatSpec
-import org.scalatest.Matchers
-import rescala.fullmv._
+import org.scalatest.{FlatSpec, Matchers}
+import rescala.fullmv.incubator._
+import tests.rescala.fullmv.TestWithRemoteHost
 
 class TransactionPhaseBroadcastTest extends FlatSpec with Matchers with TestWithRemoteHost{
   "transaction phase transitions " should "work locally" in {

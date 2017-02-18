@@ -1,15 +1,12 @@
-package tests.rescala.fullmv
+package tests.rescala.fullmv.incubator
 
-import java.rmi.registry.LocateRegistry
-import java.rmi.registry.Registry
-import java.rmi.{ConnectException, Naming, RemoteException}
+import java.rmi.registry.{LocateRegistry, Registry}
 import java.rmi.server.UnicastRemoteObject
+import java.rmi.{ConnectException, Naming, RemoteException}
 
-import org.scalatest.Tag
-import rescala.fullmv.Transaction
-import rescala.fullmv.Host
-import org.scalatest.words.ResultOfStringPassedToVerb
 import org.scalatest.FlatSpecLike
+import org.scalatest.words.ResultOfStringPassedToVerb
+import rescala.fullmv.incubator.{Host, Transaction}
 
 trait TestRemoteHostApi extends java.rmi.Remote {
   @throws[RemoteException]

@@ -1,17 +1,14 @@
-package tests.rescala.fullmv
+package tests.rescala.fullmv.incubator
 
-import org.scalatest.FlatSpec
-import org.scalatest.Matchers
+import java.awt.Desktop
+import java.io.{BufferedReader, File, InputStreamReader, PrintStream}
+import java.util.function.Consumer
+
+import org.scalatest.{FlatSpec, Matchers}
+import rescala.fullmv.incubator.{SelfFirst, Transaction}
+
 import scala.collection.mutable.SortedSet
 import scala.util.Random
-import java.io.PrintStream
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.util.function.Consumer
-import java.io.File
-import rescala.fullmv.Transaction
-import rescala.fullmv.SelfFirst
-import java.awt.Desktop
 
 class SerializationGraphTrackingConcurrencyTest extends FlatSpec with Matchers {
   "Serialization Graph Tracking" should "keep SSG acyclic under concurrent bombardment" in {

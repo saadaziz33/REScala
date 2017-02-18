@@ -239,6 +239,7 @@ lazy val fullmv = project.in(file("Research/Multiversion"))
     publish := {},
     publishLocal := {},
     scalatestDependency)
+  .dependsOn(rescalaJVM)
   .dependsOn(RootProject(uri("git://github.com/misterd123/gs-ui")))
 
 lazy val meta = project.in(file("Research/Meta"))
