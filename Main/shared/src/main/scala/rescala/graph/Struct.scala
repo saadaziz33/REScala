@@ -20,7 +20,7 @@ trait SimplePropagationStruct[R] {
   def reevOut(turn: Turn[_]): Set[Reactive[R]]
 }
 
-trait AccessStruct[D <: Unwrap[_, _], R] {
+trait AccessStruct[D, R] {
   def now(turn: Turn[_]): D
   def after(turn: Turn[_]): D
   def regRead(turn: Turn[_]): D

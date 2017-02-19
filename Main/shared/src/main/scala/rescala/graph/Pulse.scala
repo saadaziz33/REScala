@@ -6,7 +6,6 @@ import tests.rescala.EmptySignalTestSuite
 import scala.util.{Failure, Success, Try}
 
 private sealed trait RPValueWrapper[+W] {
-  self: Unwrap[W, _] =>
   /**
     * If the pulse indicates a change: Applies a function to the updated value of the pulse and returns a new pulse
     * indicating a change to this updated value.
@@ -17,8 +16,8 @@ private sealed trait RPValueWrapper[+W] {
     * @return Pulse indicating the update performed by the applied function or an empty pulse if there is no updated value
     */
   def map[Q](f: W => Q): RPValueWrapper[Q] = this match {
-    case ValueWrapper(value) => Change(f(value))
-    case NoValue => NoChange
+    case ValueWrapper(value) => ValueWrapper(f(value))
+    case NoValue => NoValue
     case ex@ExceptionWrapper(_) => ex
   }
 
@@ -33,7 +32,7 @@ private sealed trait RPValueWrapper[+W] {
     */
   def flatMap[Q](f: W => RPValueWrapper[Q]): RPValueWrapper[Q] = this match {
     case ValueWrapper(value) => f(value)
-    case NoValue => NoChange
+    case NoValue => NoValue
     case ex@ExceptionWrapper(_) => ex
   }
 
@@ -47,8 +46,8 @@ private sealed trait RPValueWrapper[+W] {
     */
   def filter(p: W => Boolean): RPValueWrapper[W] = this match {
     case c@ValueWrapper(value) if p(value) => c
-    case ValueWrapper(_) => NoChange
-    case NoValue => NoChange
+    case ValueWrapper(_) => NoValue
+    case NoValue => NoValue
     case ex@ExceptionWrapper(_) => ex
   }
 
@@ -64,26 +63,6 @@ case object NoValue extends RPValueWrapper[Nothing]
 case class ValueWrapper[P](value: P) extends RPValueWrapper[P]
 case class ExceptionWrapper(throwable: Throwable) extends RPValueWrapper[Nothing]
 
-trait Unwrap[W, U] {
-  self: ValueWrapper[W] =>
-  def get: U
-}
-
-trait PersistentUnwrap[V] extends Unwrap[V, V] {
-  override def get: V = this match {
-    case ValueWrapper(up) => up
-    case NoValue => throw EmptySignalControlThrowable
-    case ExceptionWrapper(t) => throw t
-  }
-}
-
-trait TransientUnwrap[P] extends Unwrap[P, Option[P]] {
-  override def get: Option[P] = this match {
-    case ValueWrapper(up) => Some(up)
-    case NoValue => None
-    case ExceptionWrapper(t) => throw t
-  }
-}
 
 object RPValueWrappers {
   type PersistentValue[V] = RPValueWrapper[V] with PersistentUnwrap[V]

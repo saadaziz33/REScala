@@ -7,13 +7,6 @@ import rescala.propagation.Turn
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 
-
-object PersistentVersionHistoryStruct {
-  type O = PersistentVersionHistoryStruct[_]
-}
-
-import rescala.fullmv.PersistentVersionHistoryStruct.O
-
 sealed trait FramingBranchResult[+R] {
   def processBranching(txn: Transaction, taskPool: TaskPool): Unit
 }
@@ -50,13 +43,8 @@ sealed trait NotificationResultAction[+R]
 case object NotGlitchFreeReady extends NotificationResultAction[Nothing]
 case object ResolvedQueuedToUnchanged extends NotificationResultAction[Nothing]
 case object GlitchFreeReadyButQueued extends NotificationResultAction[Nothing]
-case class GlitchFreeReady[R](txn: Transaction) extends NotificationResultAction[R]
-case class NotificationAndMaybeNextReevaluation[R](out: Set[Reactive[R]], txn: Transaction, changed: Boolean, maybeFollowFraming: Option[Transaction], reevaluationReady: Boolean) extends NotificationResultAction[V, R] {
-  def send(taskPool: TaskPool): Unit = {
-    if(out.size != 1) txn.branches(out.size - 1)
-    for (node <- out) taskPool.addNotification(node, txn, changed, maybeFollowFraming)
-  }
-}
+case class GlitchFreeReady(txn: Transaction) extends NotificationResultAction[Nothing]
+case class NotificationAndMaybeNextReevaluation[R](out: Set[Reactive[R]], txn: Transaction, changed: Boolean, maybeFollowFraming: Option[Transaction], reevaluationReady: Boolean) extends NotificationResultAction[R]
 
 class PersistentVersionHistoryStruct[V, R](val host: Host, init: Transaction, initialValue: PersistentValue[V]) extends PersistentReevaluationStruct[V, R] with PersistentAccessStruct[V, R] {
   // =================== STORAGE ====================
@@ -333,7 +321,8 @@ class PersistentVersionHistoryStruct[V, R](val host: Host, init: Transaction, in
 
     /* TODO move to node
       // send out notifications
-      notification.send(host.taskPool)
+      if(out.size != 1) txn.branches(out.size - 1)
+      for (node <- out) taskPool.addNotification(node, txn, changed, maybeFollowFraming)
 
       // progress with next reevaluation if found
       if (notification.maybeNextReevaluation.isDefined) {

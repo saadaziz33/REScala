@@ -37,22 +37,35 @@ trait Reactive[R] extends Node {
   override def toString: String = name
 }
 
-trait AccessibleNode[T, D <: Unwrap[_, T], R] extends Node {
+trait AccessibleNode[T, D, R] extends Node {
   override protected[rescala] type Struct <: AccessStruct[D, R]
+
+  protected[rescala] def access(storedData: D): T
 
   // only used inside macro and will be replaced there
   @compileTimeOnly("Signal.apply can only be used inside of Signal expressions")
   final def apply(): T = throw new IllegalAccessException(s"$this.apply called outside of macro")
 
-  def now(turn: Turn[R]): T = struct.now(turn).get
-  def after(ticket: ReevaluationTicket[R]): T = struct.after(turn).get
+  def now(turn: Turn[R]): T = access(struct.now(turn))
+  def after(ticket: ReevaluationTicket[R]): T = access(struct.after(ticket.turn))
 }
 
-trait PersistentAccessibleNode[V, R] extends Node {
+trait PersistentAccessibleNode[V, R] extends AccessibleNode[V, PersistentValue[V], R] {
   override protected[rescala] type Struct <: PersistentAccessStruct[V, R]
-  def before(ticket: ReevaluationTicket[R]): V = struct.before(turn).get
+  override protected[rescala] def access(persistentValue: PersistentValue[V]): V = persistentValue match {
+    case ValueWrapper(up) => up
+    case NoValue => throw EmptySignalControlThrowable
+    case ExceptionWrapper(t) => throw t
+  }
+
+  def before(ticket: ReevaluationTicket[R]): V = access(struct.before(ticket.turn))
 }
-trait TransientAccessibleNode[P, R] extends Node {
+trait TransientAccessibleNode[P, R] extends AccessibleNode[Option[P], TransientPulse[P], R]  {
   override protected[rescala] type Struct <: TransientAccessStruct[P, R]
+  override protected[rescala] def access(transientPulse: TransientPulse[P]): Option[P] = {
+    case ValueWrapper(up) => Some(up)
+    case NoValue => None
+    case ExceptionWrapper(t) => throw t
+  }
 }
 
