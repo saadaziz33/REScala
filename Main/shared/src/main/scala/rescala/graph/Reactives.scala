@@ -12,6 +12,8 @@ trait Node {
   protected[rescala] def struct: Struct
 }
 
+case class ReevaluationResult(valueChanged: Boolean, incomingChanged: Boolean)
+
 /**
   * A reactive value is something that can be reevaluated
   *
@@ -20,7 +22,7 @@ trait Node {
 trait Reactive[R] extends Node {
   final override val hashCode: Int = Globals.nextID().hashCode()
 
-  override protected[rescala] type Struct <: PropagationStruct[R]
+  override protected[rescala] type Struct// <: PropagationStruct[R]
 
   /**
     * Reevaluates this Reactive when it is internally scheduled for reevaluation.
@@ -30,7 +32,7 @@ trait Reactive[R] extends Node {
     * @param turn Turn that handles the reevaluation
     * @return Result of the reevaluation
     */
-  protected[rescala] def reevaluate()(implicit turn: Turn[R]): ReevaluationResult[R]
+  protected[rescala] def reevaluate(turn: Turn[R]): ReevaluationResult
 
   /** for debugging */
   private val name = Globals.declarationLocationName()

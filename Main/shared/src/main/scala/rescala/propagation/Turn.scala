@@ -8,8 +8,8 @@ import rescala.twoversion.Committable
   *
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
-trait Turn[S <: Struct] {
-
+trait Turn[R] {
+  final protected[rescala] val staticReevaluationTicket = new StaticReevaluationTicket[R](this)
   /**
     * Creates a new spore initialized with the given parameters
     *

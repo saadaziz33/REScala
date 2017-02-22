@@ -18,7 +18,7 @@ import scala.language.higherKinds
   * @tparam T Type returned when the event fires
   * @tparam S Struct type used for the propagation of the event
   */
-trait Event[+T, S <: Struct] extends PulseOption[T, S] with Observable[T, S] {
+trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluation[T, R] with Disconnectable[R] with Observable[T, R] {
 
   def disconnect()(implicit engine: Engine[S, Turn[S]]): Unit
 

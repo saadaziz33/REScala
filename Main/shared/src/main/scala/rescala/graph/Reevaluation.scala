@@ -1,18 +1,16 @@
 package rescala.graph
 
 import rescala.engine.Engine
-import rescala.propagation.Turn
+import rescala.graph.RPValueWrappers.{PersistentValue, TransientPulse}
+import rescala.propagation.{DynamicReevaluationTicket, ReevaluationTicket, StaticReevaluationTicket, Turn}
 
-/**
-  * Calculates and stores added or removed dependencies of a reactive value.
-  *
-  * @param novel Set of dependencies after re-evaluation
-  * @param old   Set of dependencies before re-evaluation
-  * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
-  */
-case class Diff[R](novel: Set[Reactive[R]], old: Set[Reactive[R]]) extends DepDiff[R] {
-  lazy val added = novel.diff(old)
-  lazy val removed = old.diff(novel)
+
+trait Reevaluation[R] extends Reactive[R] {
+  protected[rescala] type In
+  protected[rescala] type Out
+  override protected[rescala] type Struct <: ReevaluationStruct[In, Out, R]
+  protected[rescala] type Ticket <: ReevaluationTicket[R]
+  protected[rescala] def computeResult(in: In, ticket: Ticket): Option[Out]
 }
 
 /**
@@ -22,19 +20,14 @@ case class Diff[R](novel: Set[Reactive[R]], old: Set[Reactive[R]]) extends DepDi
   * @tparam P Value type stored by the reactive value and its pulse
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
-trait StaticReevaluation[+P, S <: Struct] extends Disconnectable[S] {
-  this: Pulsing[P, S] =>
-
-  /** side effect free calculation of the new pulse for the current turn */
-  protected[rescala] def calculatePulse()(implicit turn: Turn[S]): Pulse[P]
-
-  final override protected[rescala] def computeReevaluationResult()(implicit turn: Turn[S]): ReevaluationResult[S] = {
-    val p = calculatePulse()
-    set(p)
-    ReevaluationResult.Static(hasChanged)
+trait StaticReevaluation[R] extends Reevaluation[R] {
+  override protected[rescala] type Ticket = StaticReevaluationTicket[R]
+  protected[rescala] def reevaluate(turn: Turn[R]): ReevaluationResult = {
+    val (in, incoming) = struct.reevIn(turn)
+    val result = computeResult(in, turn.staticReevaluationTicket)
+    struct.reevDone(turn, result, incoming)
+    ReevaluationResult(result.isDefined, false)
   }
-
-
 }
 
 
@@ -45,25 +38,39 @@ trait StaticReevaluation[+P, S <: Struct] extends Disconnectable[S] {
   * @tparam P Value type stored by the reactive value and its pulse
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
-trait DynamicReevaluation[+P, S <: Struct] extends Disconnectable[S] {
-  this: Pulsing[P, S] =>
-
-  /** side effect free calculation of the new pulse and the new dependencies for the current turn */
-  def calculatePulseDependencies(implicit turn: Turn[S]): (Pulse[P], Set[Reactive[S]])
-
-  final override protected[rescala] def computeReevaluationResult()(implicit turn: Turn[S]): ReevaluationResult[S] = {
-    val (newPulse, newDependencies) = calculatePulseDependencies
-
-    val oldDependencies = state.incoming
-    set(newPulse)
-    ReevaluationResult.Dynamic(hasChanged, DepDiff(newDependencies, oldDependencies))
-
+trait DynamicReevaluation[R] extends Reevaluation[R] {
+  override protected[rescala] type Ticket = StaticReevaluationTicket[R]
+  protected[rescala] def reevaluate(turn: Turn[R]): ReevaluationResult = {
+    val (in, incoming) = struct.reevIn(turn)
+    val ticket = new DynamicReevaluationTicket[R](turn, incoming)
+    val result = computeResult(in, ticket)
+    struct.reevDone(turn, result, ticket.collectedDependencies)
+    ReevaluationResult(result.isDefined, ticket.incomingsChanged)
   }
 }
 
-trait Disconnectable[R] {
-  this: Reactive[R] =>
+trait TransientReevaluation[P, R] extends Reevaluation[R] {
+  override protected[rescala] type In = Unit
+  override protected[rescala] type Out = TransientPulse[P]
 
+  protected[rescala] def computePulse(ticket: Ticket): Option[TransientPulse[P]]
+  final override protected[rescala] def computeResult(in: Unit, ticket: Ticket): Option[TransientPulse[P]] = {
+    computePulse()
+  }
+}
+
+trait PersistentReevaluation[V, R] extends Reevaluation[R] {
+  override protected[rescala] type In = PersistentValue[V]
+  override protected[rescala] type Out = PersistentValue[V]
+
+  protected[rescala] def computeValue(in: PersistentValue[V], ticket: Ticket): Option[PersistentValue[V]]
+  final override protected[rescala] def computeResult(in: PersistentValue[V], ticket: Ticket): Option[PersistentValue[V]] = {
+    val newValue = computeValue(in, ticket)
+    if(in == newValue) None else Some(newValue)
+  }
+}
+
+trait Disconnectable[R] extends Reevaluation[R] {
   @volatile private var disconnected = false
 
   final def disconnect()(implicit engine: Engine[R, Turn[R]]): Unit = {
@@ -72,14 +79,14 @@ trait Disconnectable[R] {
     }
   }
 
-  protected[rescala] def computeReevaluationResult()(implicit turn: Turn[R]): ReevaluationResult[R]
-
-  final override protected[rescala] def reevaluate()(implicit turn: Turn[R]): ReevaluationResult[R] = {
+  abstract override protected[rescala] def reevaluate(turn: Turn[R]): ReevaluationResult = {
     if (disconnected) {
-      ReevaluationResult.Dynamic(changed = false, DepDiff(novel = Set.empty, old = state.incoming))
+      val(_, incomings) = struct.reevIn(turn)
+      for(drop <- incomings) drop.struct.drop(turn, this)
+      struct.reevDone(turn, None, Set.empty)
+      ReevaluationResult(changed = false, incomings.isEmpty)
     } else {
-      computeReevaluationResult()
+      super.reevaluate(turn)
     }
   }
-
 }

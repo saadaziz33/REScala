@@ -65,6 +65,6 @@ case class ExceptionWrapper(throwable: Throwable) extends RPValueWrapper[Nothing
 
 
 object RPValueWrappers {
-  type PersistentValue[V] = RPValueWrapper[V] with PersistentUnwrap[V]
-  type TransientPulse[P] = RPValueWrapper[P] with TransientUnwrap[P]
+  type PersistentValue[V] = RPValueWrapper[V]
+  type TransientPulse[P] = Try[P]
 }

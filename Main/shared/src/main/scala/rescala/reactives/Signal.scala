@@ -1,7 +1,7 @@
 package rescala.reactives
 
 import rescala.engine.{Engine, TurnSource}
-import rescala.graph.{Pulse, Stateful, Struct}
+import rescala.graph._
 import rescala.propagation.Turn
 import rescala.reactives.RExceptions.EmptySignalControlThrowable
 import rescala.reactives.Signals.Diff
@@ -18,7 +18,7 @@ import scala.util.control.NonFatal
   * @tparam A Type stored by the signal
   * @tparam S Struct type used for the propagation of the signal
   */
-trait Signal[+A, S <: Struct] extends Stateful[A, S] with Observable[A, S] {
+trait Signal[+A, R] extends PersistentAccessibleNode[A, R] with PersistentReevaluation[A, R] with Disconnectable[R] with Observable[A, R] {
 
   final def recover[R >: A](onFailure: Throwable => R)(implicit ticket: TurnSource[S]): Signal[R, S] = Signals.static(this) { turn =>
     try this.regRead(turn) catch {

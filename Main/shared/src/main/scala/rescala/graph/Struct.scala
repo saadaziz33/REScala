@@ -5,15 +5,14 @@ import rescala.propagation.Turn
 
 import scala.language.{existentials, higherKinds, implicitConversions}
 
-trait PersistentReevaluationStruct[V, R] {
-  def reevDone(turn: Turn[_], value: Option[PersistentValue[V]], incomings: Set[Reactive[R]]): Unit
-  def reevIn(turn: Turn[_]): (PersistentValue[V], Set[Reactive[R]])
+trait ReevaluationStruct[I, O, R] {
+  def reevDone(turn: Turn[_], result: Option[O], incoming: Set[AccessibleNode[_, _, R]]): Unit
+  def reevIn(turn: Turn[_]): (I, Set[AccessibleNode[_, _, R]])
 }
 
-trait TransientReevaluationStruct[P, R] {
-  def reevDone(turn: Turn[_], value: TransientPulse[P], incomings: Set[Reactive[R]]): Unit
-  def reevIn(turn: Turn[_]): Set[Reactive[R]]
-}
+trait PersistentReevaluationStruct[V, R] extends ReevaluationStruct[PersistentValue[V], PersistentValue[V], R]
+
+trait TransientReevaluationStruct[P, R] extends ReevaluationStruct[Unit, TransientPulse[P], R]
 
 
 trait SimplePropagationStruct[R] {
