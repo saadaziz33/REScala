@@ -487,7 +487,6 @@ class PersistentVersionHistoryStruct[V, R](val host: Host, init: Transaction, in
     val (successorWrittenVersions, maybeSuccessorFrame) = synchronized {
       val position = ensureReadVersion(txn)
       assert(_versions(position).out.contains(remove), "must not drop a non-existing edge!")
-      val result = after(txn) // TODO technically unnecessary, think about if removing it violates anything.
       _versions(position).out -= remove
       retrofitSourceOuts(position, remove, -1)
     }
