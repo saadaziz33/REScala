@@ -4,7 +4,7 @@ import rescala.engine.{Engine, TurnSource}
 import rescala.graph.Pulse.{Change, Exceptional, NoChange}
 import rescala.graph._
 import rescala.propagation.Turn
-import rescala.reactives.RExceptions.EmptySignalControlThrowable
+import rescala.reactives.RExceptions.{EmptySignalControlThrowable, UnhandledFailureException}
 
 import scala.collection.immutable.{LinearSeq, Queue}
 import scala.language.higherKinds
@@ -30,12 +30,15 @@ trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluat
   final def +=(react: T => Unit)(implicit ticket: TurnSource[S]): Observe[S] = observe(react)(ticket)
 
 
-  final def recover[R >: T](onFailure: Throwable => R)(implicit ticket: TurnSource[S]): Event[R, S] = Events.static(s"(recover $this)", this) { turn =>
+  final def recover[R >: T](onFailure: PartialFunction[Throwable,R])(implicit ticket: TurnSource[S]): Event[R, S] = Events.static(s"(recover $this)", this) { turn =>
     pulse(turn) match {
-      case Exceptional(t) => Pulse.Change(onFailure(t))
+      case Exceptional(t) => Pulse.Change(onFailure.applyOrElse[Throwable, R](t, throw _))
       case other => other
     }
   }
+
+
+  final def abortOnError()(implicit ticket: TurnSource[S]): Event[T, S] = recover{case t => throw new UnhandledFailureException(this, t)}
 
 
   /** Events disjunction. */
@@ -146,7 +149,6 @@ trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluat
 
   /** Return a Signal that is updated only when e fires, and has the value of the signal s */
   final def snapshot[A](s: Signal[A, S])(implicit ticket: TurnSource[S]): Signal[A, S] = ticket { turn =>
-    // TODO potentially glitched initialization!
     Signals.Impl.makeStatic(Set[Reactive[S]](this, s), s.regRead(turn)) { (t, current) =>
       this.regRead(t).fold(current)(_ => s.regRead(t))
     }(turn)
@@ -180,9 +182,10 @@ trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluat
   }
 
   /** Like latest, but delays the value of the resulting signal by n occurrences */
-  final def delay[T1 >: T](init: T1, n: Int)(implicit ticket: TurnSource[S]): Signal[T1, S] = ticket { turn =>
+  final def delay[T1 >: T](init: => T1, n: Int)(implicit ticket: TurnSource[S]): Signal[T1, S] = ticket { turn =>
+    lazy val initL = init
     val history: Signal[LinearSeq[T], S] = last(n + 1)(turn)
-    history.map { h => if (h.size <= n) init else h.head }(turn)
+    history.map { h => if (h.size <= n) initL else h.head }(turn)
   }
 
   /** returns the values produced by the last event produced by mapping this value */

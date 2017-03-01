@@ -2,6 +2,9 @@ package tests.rescala
 
 
 
+import rescala.graph.Pulse
+import rescala.reactives.RExceptions.UnhandledFailureException
+
 import scala.util.{Failure, Success, Try}
 
 
@@ -39,8 +42,8 @@ class ExceptionPropagationTestSuite extends RETests {
     var dres: Try[Int] = null
     var sres: Try[Int] = null
 
-    de.map(Success(_)).recover(Failure(_)).observe(dres = _)
-    se.map(Success(_)).recover(Failure(_)).observe(sres = _)
+    de.map(Success(_)).recover{ case t => Failure(t) }.observe(dres = _)
+    se.map(Success(_)).recover{ case t => Failure(t) }.observe(sres = _)
 
     e.fire(42)
 
@@ -130,12 +133,76 @@ class ExceptionPropagationTestSuite extends RETests {
     input.set("200")
     assert(res.pair === (100 -> 200), "successful changed3")
 
-
-
-
-
-
-
   }
 
+
+  allEngines("observers can abort"){ engine => import engine._
+    val v = Var(0)
+    val ds = Signal { div(v()) }
+
+    var res = 100
+
+    intercept[UnhandledFailureException]{ds.observe(res = _)}
+    assert(res === 100, "can not add observers to exceptional signals")
+
+    v.set(42)
+    ds.observe(res = _)
+    assert(res === 100/42, "can add observers if no longer failed")
+
+
+    intercept[UnhandledFailureException]{ v.set(0) }
+    assert(res===100/42, "observers are not triggered on failure")
+    assert(v.now === 42, "transaction is aborted on failure")
+  }
+
+  allEngines("do not observe emptiness"){ engine => import engine._
+    val v = Var.empty[Int]
+    val ds = Signal { div(v()) }
+
+    var res = 100
+
+    ds.observe(res = _)
+    assert(res === 100, "adding observers to empty signal does nothing")
+
+    v.set(42)
+    assert(res === 100/42, "making signal non empty triggers observer")
+
+
+    engine.plan(v)(t => v.admitPulse(Pulse.empty)(t))
+    assert(res===100/42, "observers are not triggered when empty")
+    intercept[NoSuchElementException]{v.now}
+  }
+
+  allEngines("abort combinator"){ engine => import engine._
+    val v = Var(0)
+    val ds = Signal { div(v()) }
+
+    var res = 100
+
+    intercept[UnhandledFailureException]{ds.abortOnError()}
+
+    v.set(42)
+    ds.abortOnError()
+    assert(ds.now === 100/42, "can add observers if no longer failed")
+
+
+    intercept[UnhandledFailureException]{ v.set(0) }
+    assert(ds.now===100/42, "observers are not triggered on failure")
+    assert(v.now === 42, "transaction is aborted on failure")
+  }
+
+  allEngines("partial recovery"){ engine => import engine._
+    val v = Var(2)
+    val ds = Signal { div(v()) }
+    val ds2: Signal[Int] = Signal { if (ds() == 10) throw new IndexOutOfBoundsException else ds() }
+    val recovered = ds2.recover{ case _: IndexOutOfBoundsException => 9000}
+
+    assert(recovered.now === 50)
+    v.set(0)
+    intercept[ArithmeticException](recovered.now)
+    v.set(10)
+    assert(recovered.now === 9000)
+    intercept[IndexOutOfBoundsException](ds2.now)
+
+  }
 }

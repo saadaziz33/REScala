@@ -3,7 +3,7 @@ package rescala.reactives
 import rescala.engine.{Engine, TurnSource}
 import rescala.graph._
 import rescala.propagation.Turn
-import rescala.reactives.RExceptions.EmptySignalControlThrowable
+import rescala.reactives.RExceptions.{EmptySignalControlThrowable, UnhandledFailureException}
 import rescala.reactives.Signals.Diff
 
 import scala.language.higherKinds
@@ -20,11 +20,14 @@ import scala.util.control.NonFatal
   */
 trait Signal[+A, R] extends PersistentAccessibleNode[A, R] with PersistentReevaluation[A, R] with Disconnectable[R] with Observable[A, R] {
 
-  final def recover[R >: A](onFailure: Throwable => R)(implicit ticket: TurnSource[S]): Signal[R, S] = Signals.static(this) { turn =>
+  final def recover[R >: A](onFailure: PartialFunction[Throwable,R])(implicit ticket: TurnSource[S]): Signal[R, S] = Signals.static(this) { turn =>
     try this.regRead(turn) catch {
-      case NonFatal(e) => onFailure(e)
+      case NonFatal(e) => onFailure.applyOrElse[Throwable, R](e, throw _)
     }
   }
+  //final def recover[R >: A](onFailure: Throwable => R)(implicit ticket: TurnSource[S]): Signal[R, S] = recover(PartialFunction(onFailure))
+
+  final def abortOnError()(implicit ticket: TurnSource[S]): Signal[A, S] = recover{case t => throw new UnhandledFailureException(this, t)}
 
   final def withDefault[R >: A](value: R)(implicit ticket: TurnSource[S]): Signal[R, S] = Signals.static(this) { (turn) =>
     try this.regRead(turn) catch {
@@ -41,7 +44,6 @@ trait Signal[+A, R] extends PersistentAccessibleNode[A, R] with PersistentReeval
   final def flatten[R](implicit ev: Flatten[A, S, R], ticket: TurnSource[S]): R = ev.apply(this)
 
   /** Delays this signal by n occurrences */
-  // TODO potentially glitched initialization!
   final def delay(n: Int)(implicit ticket: TurnSource[S]): Signal[A, S] = ticket { implicit turn => changed.delay(this.regRead, n) }
 
   /** Create an event that fires every time the signal changes. It fires the tuple (oldVal, newVal) for the signal.

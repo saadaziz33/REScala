@@ -1,6 +1,6 @@
 package rescala.propagation
 
-import rescala.graph.{Pulse, PulseOption, Reactive, Stateful, Struct}
+import rescala.graph.{Pulse, Reactive, Struct}
 import rescala.twoversion.Committable
 
 /**
@@ -46,7 +46,6 @@ trait Turn[R] {
     *
     * @param committable Commitable element to be scheduled
     */
-  // TODO should not use twoversion.Committable here
   def schedule(committable: Committable): Unit
 
   /**
@@ -54,5 +53,6 @@ trait Turn[R] {
     *
     * @param f Handler function to register.
     */
-  def observe(f: => Unit): Unit
+  def observe(f: () => Unit): Unit
+
 }
