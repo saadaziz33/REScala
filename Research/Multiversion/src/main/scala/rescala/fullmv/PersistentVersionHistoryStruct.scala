@@ -28,8 +28,8 @@ case class FramingBranchOutSuperseding[R](out: Set[Reactive[R]], supersede: Tran
   }
 }
 
-class Version[D, R](val txn: Transaction, var out: Set[Reactive[R]], var pending: Int, var changed: Int, var value: Option[D]) {
-  def isWritten: Boolean = changed == 0 && value.isDefined
+class Version[D <: Pulse[_], R](val txn: Transaction, var out: Set[Reactive[R]], var pending: Int, var changed: Int, var value: D) {
+  def isWritten: Boolean = changed == 0 && value.isChange
   def isFrame: Boolean = pending > 0 || (changed > 0 && !isWritten)
   def isWrite: Boolean = pending > 0 || changed > 0 || isWritten
   def isReadOrDynamic: Boolean = !isWrite
@@ -297,11 +297,11 @@ class PersistentVersionHistoryStruct[V, R](val host: Host, init: Transaction, in
     (latestValue, incomings)
   }
 
-  override def reevDone(turn: Turn[_], maybeValue: Option[PersistentValue[V]], incomings: Set[Reactive[R]]): Unit = {
+  override def reevDone(turn: Turn[_], maybeValue: PersistentValue[V], incomings: Set[Reactive[R]]): Unit = {
     assert(synchronized{_versions(firstFrame)}.txn == turn)
-    if(maybeValue.isDefined) {
+    if(maybeValue.isChange) {
       this.latestValue = maybeValue.get
-      _versions(firstFrame).value = maybeValue // technicaly, Some(value.get), but that's pointless
+      _versions(firstFrame).value = maybeValue
     }
     this.incomings = incomings
   }
@@ -440,7 +440,7 @@ class PersistentVersionHistoryStruct[V, R](val host: Host, init: Transaction, in
 
   /**
     * entry point for reg-read(this, ticket.issuer) (i.e., read [[Version.value]] assuming edge this -> ticket.issuer exists)
-    * @param ticket the executing reevaluation's ticket
+    * @param txn the executing reevaluation's transaction
     * @return the corresponding [[Version.value]]
     */
   def regRead(txn: Transaction): PersistentValue[V] = synchronized {
@@ -462,8 +462,9 @@ class PersistentVersionHistoryStruct[V, R](val host: Host, init: Transaction, in
   // =================== DYNAMIC OPERATIONS ====================
 
   /**
-    * entry point for discover(this, ticket.issuer). May suspend.
-    * @param ticket the executing reevaluation's ticket
+    * entry point for discover(this, add). May suspend.
+    * @param txn the executing reevaluation's transaction
+    * @param add the new edge's sink node
     * @return the appropriate [[Version.value]].
     */
   def discover(txn: Transaction, add: Reactive[R]): PersistentValue[V] = {
@@ -481,7 +482,8 @@ class PersistentVersionHistoryStruct[V, R](val host: Host, init: Transaction, in
 
   /**
     * entry point for drop(this, ticket.issuer); may suspend temporarily.
-    * @param ticket the executing reevaluation's ticket
+    * @param txn the executing reevaluation's transaction
+    * @param remove the removed edge's sink node
     */
   def drop(txn: Transaction, remove: Reactive[R]): Unit = {
     val (successorWrittenVersions, maybeSuccessorFrame) = synchronized {

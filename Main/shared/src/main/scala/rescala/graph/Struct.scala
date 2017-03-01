@@ -20,14 +20,14 @@ trait SimplePropagationStruct[R] {
 }
 
 trait AccessStruct[D, R] {
-  def now(turn: Turn[_]): D
   def after(turn: Turn[_]): D
   def regRead(turn: Turn[_]): D
   def drop(turn: Turn[_], remove: Reactive[R]): Unit
   def discover(turn: Turn[_], add: Reactive[R]): D
 }
 
-trait PersistentAccessStruct[P, R] extends AccessStruct[PersistentValue[P], R] {
-  def before(turn: Turn[_]): PersistentValue[P]
+trait PersistentAccessStruct[V, R] extends AccessStruct[PersistentValue[V], R] {
+  def now(turn: Turn[_]): PersistentValue[V]
+  def before(turn: Turn[_]): PersistentValue[V]
 }
 trait TransientAccessStruct[P, R] extends AccessStruct[TransientPulse[P], R]

@@ -45,7 +45,7 @@ trait DynamicReevaluation[R] extends Reevaluation[R] {
     val ticket = new DynamicReevaluationTicket[R](turn, incoming)
     val result = computeResult(in, ticket)
     struct.reevDone(turn, result, ticket.collectedDependencies)
-    ReevaluationResult(result.isDefined, ticket.incomingsChanged)
+    ReevaluationResult(result.isChange, ticket.incomingsChanged)
   }
 }
 
@@ -53,7 +53,7 @@ trait TransientReevaluation[P, R] extends Reevaluation[R] {
   override protected[rescala] type In = Unit
   override protected[rescala] type Out = TransientPulse[P]
 
-  protected[rescala] def computePulse(ticket: Ticket): Option[TransientPulse[P]]
+  protected[rescala] def computePulse(ticket: Ticket): TransientPulse[P]
   final override protected[rescala] def computeResult(in: Unit, ticket: Ticket): Option[TransientPulse[P]] = {
     computePulse()
   }
@@ -63,7 +63,7 @@ trait PersistentReevaluation[V, R] extends Reevaluation[R] {
   override protected[rescala] type In = PersistentValue[V]
   override protected[rescala] type Out = PersistentValue[V]
 
-  protected[rescala] def computeValue(in: PersistentValue[V], ticket: Ticket): Option[PersistentValue[V]]
+  protected[rescala] def computeValue(in: PersistentValue[V], ticket: Ticket): PersistentValue[V]
   final override protected[rescala] def computeResult(in: PersistentValue[V], ticket: Ticket): Option[PersistentValue[V]] = {
     val newValue = computeValue(in, ticket)
     if(in == newValue) None else Some(newValue)

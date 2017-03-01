@@ -1,9 +1,9 @@
 package rescala.graph
 
 import rescala.engine.TurnSource
+import rescala.graph.Pulse._
 import rescala.graph.RPValueWrappers.{PersistentValue, TransientPulse}
 import rescala.propagation.{ReevaluationTicket, Turn}
-import rescala.reactives.RExceptions.EmptySignalControlThrowable
 
 import scala.annotation.compileTimeOnly
 
@@ -48,26 +48,26 @@ trait AccessibleNode[T, D, R] extends Node {
   @compileTimeOnly("Signal.apply can only be used inside of Signal expressions")
   final def apply(): T = throw new IllegalAccessException(s"$this.apply called outside of macro")
 
-  def now(turn: Turn[R]): T = access(struct.now(turn))
   def after(ticket: ReevaluationTicket[R]): T = access(struct.after(ticket.turn))
 }
 
 trait PersistentAccessibleNode[V, R] extends AccessibleNode[V, PersistentValue[V], R] {
   override protected[rescala] type Struct <: PersistentAccessStruct[V, R]
   override protected[rescala] def access(persistentValue: PersistentValue[V]): V = persistentValue match {
-    case ValueWrapper(up) => up
-    case NoValue => throw EmptySignalControlThrowable
-    case ExceptionWrapper(t) => throw t
+    case Change(value) => value
+    case Exceptional(t) => throw t
+    case NoChange => throw new IllegalStateException("NoChange used as Signal value")
   }
 
+  def now(turn: Turn[R]): V = access(struct.now(turn))
   def before(ticket: ReevaluationTicket[R]): V = access(struct.before(ticket.turn))
 }
 trait TransientAccessibleNode[P, R] extends AccessibleNode[Option[P], TransientPulse[P], R]  {
   override protected[rescala] type Struct <: TransientAccessStruct[P, R]
   override protected[rescala] def access(transientPulse: TransientPulse[P]): Option[P] = {
-    case ValueWrapper(up) => Some(up)
-    case NoValue => None
-    case ExceptionWrapper(t) => throw t
+    case Change(update) => Some(update)
+    case NoChange => None
+    case Exceptional(t) => throw t
   }
 }
 
