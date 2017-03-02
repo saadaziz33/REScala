@@ -1,16 +1,17 @@
 package rescala.graph
 
 import rescala.engine.Engine
+import rescala.graph.Pulse.{Change, Exceptional, NoChange}
 import rescala.graph.RPValueWrappers.{PersistentValue, TransientPulse}
 import rescala.propagation.{DynamicReevaluationTicket, ReevaluationTicket, StaticReevaluationTicket, Turn}
 
 
 trait Reevaluation[R] extends Reactive[R] {
   protected[rescala] type In
-  protected[rescala] type Out
+  protected[rescala] type Out <: Pulse[_]
   override protected[rescala] type Struct <: ReevaluationStruct[In, Out, R]
   protected[rescala] type Ticket <: ReevaluationTicket[R]
-  protected[rescala] def computeResult(in: In, ticket: Ticket): Option[Out]
+  protected[rescala] def computeResult(in: In, ticket: Ticket): Out
 }
 
 /**
@@ -54,7 +55,7 @@ trait TransientReevaluation[P, R] extends Reevaluation[R] {
   override protected[rescala] type Out = TransientPulse[P]
 
   protected[rescala] def computePulse(ticket: Ticket): TransientPulse[P]
-  final override protected[rescala] def computeResult(in: Unit, ticket: Ticket): Option[TransientPulse[P]] = {
+  final override protected[rescala] def computeResult(in: Unit, ticket: Ticket): TransientPulse[P] = {
     computePulse()
   }
 }
@@ -64,9 +65,25 @@ trait PersistentReevaluation[V, R] extends Reevaluation[R] {
   override protected[rescala] type Out = PersistentValue[V]
 
   protected[rescala] def computeValue(in: PersistentValue[V], ticket: Ticket): PersistentValue[V]
-  final override protected[rescala] def computeResult(in: PersistentValue[V], ticket: Ticket): Option[PersistentValue[V]] = {
+  final override protected[rescala] def computeResult(in: PersistentValue[V], ticket: Ticket): PersistentValue[V] = {
     val newValue = computeValue(in, ticket)
-    if(in == newValue) None else Some(newValue)
+    newValue match {
+      case NoChange => throw new AssertionError("NoChange is not a valid signal user computation result value.")
+      case ex: Exceptional => ex
+      case v: Change[V] if v == in => NoChange
+      case v: Change[V] => v
+    }
+  }
+}
+
+trait ObserverReevaluation[R] extends Reevaluation[R] {
+  override protected[rescala] type In = Unit
+  override protected[rescala] type Out = Pulse[Nothing]
+
+  protected[rescala] def execute(ticket: Ticket): Unit
+  final override protected[rescala] def computeResult(in: Unit, ticket: Ticket): Unit = {
+    execute(ticket)
+    NoChange
   }
 }
 
