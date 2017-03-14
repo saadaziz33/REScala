@@ -45,6 +45,7 @@ trait DynamicReevaluation[R] extends Reevaluation[R] {
     val (in, incoming) = struct.reevIn(turn)
     val ticket = new DynamicReevaluationTicket[R](turn, incoming)
     val result = computeResult(in, ticket)
+    ticket.dropsAfterReevaluation()
     struct.reevDone(turn, result, ticket.collectedDependencies)
     ReevaluationResult(result.isChange, ticket.incomingsChanged)
   }
