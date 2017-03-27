@@ -1,5 +1,7 @@
 package examples.demo
 
+import javax.swing.JOptionPane
+
 import examples.demo.LFullyModularBall.BouncingBall
 import examples.demo.MPlayingFieldBall.PlayingField
 import examples.demo.ORacketMultiBall.Racket
@@ -54,11 +56,10 @@ object QNetworkRacketBall {
   val racket = placed[Server].local { implicit! => new Racket(playingField.width, true, playingField.height, panelX.Mouse.y) }
   placed[Server].local { implicit ! => shapes.transform(playingField.shape :: racket.shape :: _) }
 
-  val opponentInput = placed[Client] { implicit! =>
-    val opponent = new Opponent(panelSize.asLocal, shapes.asLocal)
-    opponent.main(Array())
-    opponent.panel2.Mouse.y
-  }
+  val opponent = placed[Client].local { implicit! => new Opponent(panelSize.asLocal, shapes.asLocal) }
+  placed[Client].main { implicit! => opponent.main(Array()) }
+  val opponentInput = placed[Client] { implicit! => opponent.panel2.Mouse.y }
+
   val racket2 = placed[Server].local { implicit! =>
     new Racket(playingField.width, false, playingField.height, opponentInput.asLocal)
 //    new Racket(playingField.width, false, playingField.height, Signal {
@@ -85,9 +86,11 @@ object QNetworkRacketBall {
     makeBall(200d, 150d)
     makeBall(-200d, 100d)
 
-    new Main {
-      override val panel: ShapesPanel = QNetworkRacketBall.panelX
-    }.main(Array())
+    new Thread(new Runnable{
+      override def run(): Unit = new Main {
+        override val panel: ShapesPanel = QNetworkRacketBall.panelX
+      }.main(Array())
+    }).start()
   }
 }
 
@@ -99,6 +102,6 @@ object GameServer extends App {
 
 object GameClient extends App {
   retier.multitier setup new QNetworkRacketBall.Client {
-    def connect = TCP("localhost", 1099)
+    def connect = TCP(JOptionPane.showInputDialog(null, "Please enter host address.", "Connect", JOptionPane.QUESTION_MESSAGE, null, null, "localhost").toString, 1099)
   }
 }
