@@ -18,16 +18,16 @@ licenses in ThisBuild += ("Apache-2.0", url("http://www.apache.org/licenses/LICE
 shellPrompt in ThisBuild := { state => Project.extract(state).currentRef.project + "> " }
 
 lazy val rescalaAggregate = project.in(file(".")).aggregate(rescalaJVM,
-  rescalaJS, rescalaNative, microbench, reswing, examples, examplesReswing, caseStudyEditor,
-  caseStudyRSSEvents, caseStudyRSSReactive, caseStudyRSSSimple, rescalatags,
+  microbench, reswing, examples, examplesReswing, caseStudyEditor,
+  caseStudyRSSEvents, caseStudyRSSReactive, caseStudyRSSSimple,
   datastructures, universe, reactiveStreams, documentation, meta,
-  stm, testsJVM, testsJS, fullmv, caseStudyShapes, caseStudyMill)
+  stm, testsJVM, fullmv, caseStudyShapes, caseStudyMill)
   .settings(
     publish := {},
     publishLocal := {})
 
 
-lazy val rescala = crossProject(JSPlatform, JVMPlatform, NativePlatform).in(file("Main"))
+lazy val rescala = crossProject(JVMPlatform).in(file("Main"))
   .disablePlugins(JmhPlugin)
   .settings(
     name := "rescala",
@@ -67,18 +67,11 @@ lazy val rescala = crossProject(JSPlatform, JVMPlatform, NativePlatform).in(file
        """.stripMargin
   )
   .jvmSettings()
-  .jsSettings(scalaJSUseRhino in Global := true)
-  .nativeSettings(
-    crossScalaVersions := Seq("2.11.8"),
-    scalaVersion := "2.11.8")
 
 lazy val rescalaJVM = rescala.jvm
 
-lazy val rescalaJS = rescala.js
 
-lazy val rescalaNative = rescala.native
-
-lazy val tests = crossProject(JSPlatform, JVMPlatform).in(file("Tests"))
+lazy val tests = crossProject(JVMPlatform).in(file("Tests"))
   .disablePlugins(JmhPlugin)
   .settings(
     name := "rescala-tests",
@@ -88,15 +81,13 @@ lazy val tests = crossProject(JSPlatform, JVMPlatform).in(file("Tests"))
     publishLocal := {}
   )
   .dependsOn(rescala)
-  .jvmSettings().jsSettings(scalaJSUseRhino in Global := true)
+  .jvmSettings()
 
 lazy val testsJVM = tests.jvm.dependsOn(stm)
 
-lazy val testsJS = tests.js
-
 lazy val documentation = project.in(file("Documentation/DocumentationProject"))
   .settings(tutSettings: _*)
-  .dependsOn(rescalaJVM, rescalaJS)
+  .dependsOn(rescalaJVM)
   .settings(
     publish := {},
     publishLocal := {}
@@ -123,16 +114,6 @@ lazy val reswing = project.in(file("Extensions/RESwing"))
     licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0")),
     scalaswingDependency)
 
-lazy val rescalatags = project.in(file("Extensions/Rescalatags"))
-  .enablePlugins(ScalaJSPlugin)
-  .dependsOn(rescalaJS)
-  .settings(
-    scalaJSUseRhino in Global := true,
-    libraryDependencies += "com.lihaoyi" %%% "scalatags" % "0.6.2",
-    scalatestDependency,
-    jsDependencies += RuntimeDOM,
-    licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0"))
-  )
 
 lazy val datastructures = project.in(file("Extensions/Datastructures"))
   .dependsOn(rescalaJVM)

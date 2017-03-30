@@ -1,5 +1,7 @@
 package rescala.reactives
 
+import java.io.ObjectStreamException
+
 import rescala.engine.{Engine, TurnSource}
 import rescala.graph.{Pulse, Pulsing, Struct}
 import rescala.propagation.Turn
@@ -82,6 +84,14 @@ trait Signal[+A, S <: Struct] extends Pulsing[Pulse[A], S] with Observable[A, S]
   /** Convenience function filtering to events which change this reactive to value */
   final def changedTo[V](value: V)(implicit ticket: TurnSource[S]): Event[Unit, S] = (changed filter {_ == value}).dropParam
 
+
+  private[this] lazy val remote: rescala.rmi.SerializableSignal[A] = new rescala.rmi.SerializableSignal(new rescala.rmi.RemoteSenderImpl(this.asInstanceOf[rescala.Signal[A]]))
+
+  @throws(classOf[ObjectStreamException])
+  protected def writeReplace(): Any = {
+    println(s"serialized $this")
+    remote
+  }
 
 }
 
