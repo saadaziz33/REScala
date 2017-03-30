@@ -8,10 +8,10 @@ import rescala._
 /**
   * Because we implemented the collision events inside a method, with each
   * derived from parameters to the method, this method implements a blueprint
-  * pattern of several Signal, that can be instantiated multiple times for
+  * pattern of several Signals, that can be instantiated multiple times for
   * different input parameters. We exploit this here by wrapping our ball
   * instantiation code into a closure and simply executing it twice,
-  * resulting in two bally bouncing around the PlayingField.
+  * resulting in two balls bouncing around the PlayingField.
   */
 object NFieldMultiBall extends Main {
   val shapes = Var[List[Shape]](List.empty)

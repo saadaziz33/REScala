@@ -7,7 +7,7 @@ import rescala._
 /**
   * We now begin to introduce user interaction. Currently, the
   * ball easily moves outside of the window and correcting its
-  * trajectory is very difficult. To simplyfy this, we will make
+  * trajectory is very difficult. To simplify this, we will make
   * its posX and posY resettable by clicking the middle mouse
   * button. The shapesPanel offers access to a Mouse object.
   * It contains Signals x and y reflecting the cursor's current
@@ -51,6 +51,7 @@ object INumericResettableCircle extends Main {
   val velocityX = Signal{ (panel.width() / 2 - 50).toDouble * math.sin(angle()) / Clock.NanoSecond }
   val velocityY = Signal{ (panel.height() / 2 - 50).toDouble * math.cos(angle()) / Clock.NanoSecond }
 
+  //TODO: why not zipOuter?
   val resetOrTick = Event { Some((panel.Mouse.middleButton.pressed(), Clock.ticks())) }
 
   val posX = resetOrTick.fold(0d){

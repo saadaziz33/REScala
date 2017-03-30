@@ -15,12 +15,16 @@ import scala.swing.{MainFrame, SimpleSwingApplication, UIElement}
   * nsTime into private _nsTime. Var is a Subtype of Signal, so we
   * can simply publish _nsTime upcasted to a Signal[Long], thereby
   * hiding the additional API methods of Var, e.g. set(...).
+  *
+  * Because creating specific abstractions is simple with REScala,
+  * we tend to not have a kitchen sink approach, and focus on
+  * providing better building blocks instead.
   */
 object GModularClockCircle extends SimpleSwingApplication {
   object Clock {
     val NanoSecond = 1000000000l
 
-    val _nsTime = Var(System.nanoTime())
+    private val _nsTime = Var(System.nanoTime())
     def tick() = _nsTime.set(System.nanoTime())
     val nsTime: Signal[Long] = _nsTime
 

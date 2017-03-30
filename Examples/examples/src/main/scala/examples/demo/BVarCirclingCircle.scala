@@ -20,7 +20,7 @@ import scala.swing.{MainFrame, SimpleSwingApplication, UIElement}
   *
   * When executing this application, it now shows an animation
   * instead of a static image, despite the main thread updating
-  * only angle, but neither posX nor posY, nor the circle, nor
+  * only angle, neither posX nor posY, nor the circle, nor
   * the UI. This is because Vars and Signals automatically
   * propagate changes: When the main thread assigns a new
   * value to angle, posX and posY are automatically
