@@ -17,17 +17,17 @@ licenses in ThisBuild += ("Apache-2.0", url("http://www.apache.org/licenses/LICE
 // set the prompt (for this build) to include the project id.
 shellPrompt in ThisBuild := { state => Project.extract(state).currentRef.project + "> " }
 
-lazy val rescalaAggregate = project.in(file(".")).aggregate(rescalaJVM,
+lazy val rescalaAggregate = project.in(file(".")).aggregate(rescala,
   microbench, reswing, examples, examplesReswing, caseStudyEditor,
   caseStudyRSSEvents, caseStudyRSSReactive, caseStudyRSSSimple,
   datastructures, universe, reactiveStreams, documentation, meta,
-  stm, testsJVM, fullmv, caseStudyShapes, caseStudyMill)
+  stm, tests, fullmv, caseStudyShapes, caseStudyMill)
   .settings(
     publish := {},
     publishLocal := {})
 
 
-lazy val rescala = crossProject(JVMPlatform).in(file("Main"))
+lazy val rescala = project.in(file("Main"))
   .disablePlugins(JmhPlugin)
   .settings(
     name := "rescala",
@@ -66,12 +66,8 @@ lazy val rescala = crossProject(JVMPlatform).in(file("Main"))
       s"""import rescala._
        """.stripMargin
   )
-  .jvmSettings()
 
-lazy val rescalaJVM = rescala.jvm
-
-
-lazy val tests = crossProject(JVMPlatform).in(file("Tests"))
+lazy val tests = project.in(file("Tests"))
   .disablePlugins(JmhPlugin)
   .settings(
     name := "rescala-tests",
@@ -81,13 +77,10 @@ lazy val tests = crossProject(JVMPlatform).in(file("Tests"))
     publishLocal := {}
   )
   .dependsOn(rescala)
-  .jvmSettings()
-
-lazy val testsJVM = tests.jvm.dependsOn(stm)
 
 lazy val documentation = project.in(file("Documentation/DocumentationProject"))
   .settings(tutSettings: _*)
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     publish := {},
     publishLocal := {}
@@ -97,7 +90,7 @@ lazy val documentation = project.in(file("Documentation/DocumentationProject"))
 // Extensions
 
 lazy val reactiveStreams = project.in(file("Extensions/ReactiveStreams"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     libraryDependencies += "org.reactivestreams" % "reactive-streams" % "1.0.0",
     libraryDependencies += "org.reactivestreams" % "reactive-streams-tck" % "1.0.0"
@@ -108,7 +101,7 @@ lazy val reactiveStreams = project.in(file("Extensions/ReactiveStreams"))
   )
 
 lazy val reswing = project.in(file("Extensions/RESwing"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     name := "reswing",
     licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0")),
@@ -116,7 +109,7 @@ lazy val reswing = project.in(file("Extensions/RESwing"))
 
 
 lazy val datastructures = project.in(file("Extensions/Datastructures"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     name := "datastructures",
     publish := {},
@@ -125,7 +118,7 @@ lazy val datastructures = project.in(file("Extensions/Datastructures"))
   )
 
 lazy val stm = project.in(file("Extensions/STM"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     scalatestDependency,
     publish := {},
@@ -137,7 +130,7 @@ lazy val stm = project.in(file("Extensions/STM"))
 // Examples
 
 lazy val examples = project.in(file("Examples/examples"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     name := "rescala-examples",
     publish := {},
@@ -186,7 +179,7 @@ lazy val caseStudyRSSSimple = project.in(file("Examples/RSSReader/SimpleRssReade
     scalatestDependency)
 
 lazy val universe = project.in(file("Examples/Universe"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     name := "rescala-universe",
     publish := {},
@@ -222,7 +215,7 @@ lazy val fullmv = project.in(file("Research/Multiversion"))
   .dependsOn(RootProject(uri("git://github.com/misterd123/gs-ui")))
 
 lazy val meta = project.in(file("Research/Meta"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescala)
   .settings(
     scalatestDependency,
     publish := {},

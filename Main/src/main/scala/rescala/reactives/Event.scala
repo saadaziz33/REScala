@@ -1,5 +1,7 @@
 package rescala.reactives
 
+import java.io.ObjectStreamException
+
 import rescala.engine.{Engine, TurnSource}
 import rescala.graph.Pulse.{Change, Exceptional, NoChange}
 import rescala.graph._
@@ -207,4 +209,12 @@ trait Event[+T, S <: Struct] extends Pulsing[Pulse[T], S] with Observable[T, S] 
   /** promotes the latest inner event to an outer event */
   final def flatten[B](implicit ticket: TurnSource[S], ev: T <:< Event[B, S]): Event[B, S] = flatMap(ev.apply)
 
+
+  private[this] lazy val remote: rescala.rmi.SerializableEvent[T] = new rescala.rmi.SerializableEvent(new rescala.rmi.RemoteEventSenderImpl(this.asInstanceOf[rescala.Event[T]]))
+
+  @throws(classOf[ObjectStreamException])
+  protected def writeReplace(): Any = {
+    println(s"serialized $this")
+    remote
+  }
 }

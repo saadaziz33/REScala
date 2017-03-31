@@ -7,16 +7,28 @@ import rescala.graph.Pulse
 
 
 object RemoteReactives {
-  def rebind[A](name: String, signal: rescala.Signal[A]): Unit = Naming.rebind(name, new RemoteSenderImpl(signal))
-  def lookupSignal[A](name: String): rescala.Signal[A] = from(Naming.lookup("rmi://"+name).asInstanceOf[RemoteSender[A]])
+  def rebind[A](name: String, signal: rescala.Signal[A]): Unit = Naming.rebind(name, new RemoteSignalSenderImpl(signal))
+  def lookupSignal[A](name: String): rescala.Signal[A] = signalFrom(Naming.lookup("rmi://"+name).asInstanceOf[RemoteSender[A, A]])
+  def rebind[A](name: String, event: rescala.Event[A]): Unit = Naming.rebind(name, new RemoteEventSenderImpl(event))
+  def lookupEvent[A](name: String): rescala.Event[A] = eventFrom(Naming.lookup("rmi://"+name).asInstanceOf[RemoteSender[Unit, A]])
 
-  def from[A](rs: RemoteSender[A]): rescala.Signal[A] = {
+  def signalFrom[A](rs: RemoteSender[A, A]): rescala.Signal[A] = {
     lazy val inner: rescala.Var[A] = rescala.Var(rs.registerRemoteDependant(new RemoteReceiverImpl[A] {
       override def update(pulse: Pulse[A]): Unit = {
-        println("received pulse")
+//        println("received pulse")
         rescala.explicitEngine.plan(inner)(t => inner.admitPulse(pulse)(t))
       }
     }))
+    inner
+  }
+  def eventFrom[A](rs: RemoteSender[Unit, A]): rescala.Event[A] = {
+    lazy val inner: rescala.Evt[A] = rescala.Evt()
+    rs.registerRemoteDependant(new RemoteReceiverImpl[A] {
+      override def update(pulse: Pulse[A]): Unit = {
+//        println("received pulse")
+        rescala.explicitEngine.plan(inner)(t => inner.admitPulse(pulse)(t))
+      }
+    })
     inner
   }
 
@@ -27,9 +39,14 @@ object RemoteReactives {
 
 }
 
-case class SerializableSignal[A](rs: RemoteSender[A]) {
+case class SerializableSignal[A](rs: RemoteSender[A, A]) {
   @throws(classOf[ObjectStreamException])
-  def readResolve(): Any = RemoteReactives.from(rs)
+  def readResolve(): Any = RemoteReactives.signalFrom(rs)
+}
+
+case class SerializableEvent[A](rs: RemoteSender[Unit, A]) {
+  @throws(classOf[ObjectStreamException])
+  def readResolve(): Any = RemoteReactives.eventFrom(rs)
 }
 
 
