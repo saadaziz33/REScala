@@ -20,14 +20,15 @@ object NFieldMultiBall extends Main {
   val playingField = new PlayingField(panel.width.map(_ - 25), panel.height.map(_ - 25))
   shapes.transform(playingField.shape :: _)
 
-  def makeBall(initVx: Double, initVy: Double) = {
-    val bouncingBall = new BouncingBall(initVx, initVy, Var(50), panel.Mouse.middleButton.pressed)
+  val balls = List(
+    new BouncingBall(200d, 150d, Var(50), panel.Mouse.middleButton.pressed),
+    new BouncingBall(-200d, 100d, Var(50), panel.Mouse.middleButton.pressed))
+
+  for(bouncingBall <- balls) {
     shapes.transform(bouncingBall.shape :: _)
 
     val fieldCollisions = playingField.colliders(bouncingBall.shape)
     bouncingBall.horizontalBounceSources.transform(fieldCollisions.left :: fieldCollisions.right :: _)
     bouncingBall.verticalBounceSources.transform(fieldCollisions.top :: fieldCollisions.bottom :: _)
   }
-  makeBall(200d, 150d)
-  makeBall(-200d, 100d)
 }

@@ -41,22 +41,11 @@ object QRemoteRacketBall extends Main {
   val racket = new Racket(playingField.width, true, playingField.height, panel.Mouse.y)
   shapes.transform(playingField.shape :: racket.shape :: _)
 
-  trait OpponentRegistry extends Remote {
-    @throws[RemoteException] def setOpponentInput(inputY: Signal[Int]): Unit
-  }
-  object regImpl extends UnicastRemoteObject with OpponentRegistry {
-    override def setOpponentInput(inputY: rescala.Signal[Int]): Unit = {
-      val racket2 = new Racket(playingField.width, false, playingField.height, inputY)
-      shapes.transform(racket2.shape :: _)
-      for(ball <- balls) {
-        ball.horizontalBounceSources.transform(racket2.collisionWith(ball.shape) :: _)
-      }
-    }
-  }
-  Naming.rebind("opponentRegistry", regImpl)
+  val balls = List(
+    new BouncingBall(200d, 150d, Var(50), panel.Mouse.middleButton.pressed),
+    new BouncingBall(-200d, 100d, Var(50), panel.Mouse.middleButton.pressed))
 
-  def makeBall(initVx: Double, initVy: Double) = {
-    val bouncingBall = new BouncingBall(initVx, initVy, Var(50), panel.Mouse.middleButton.pressed)
+  for(bouncingBall <- balls) {
     shapes.transform(bouncingBall.shape :: _)
 
     val fieldCollisions = playingField.colliders(bouncingBall.shape)
@@ -65,9 +54,19 @@ object QRemoteRacketBall extends Main {
 
     val racketCollision = racket.collisionWith(bouncingBall.shape)
     bouncingBall.horizontalBounceSources.transform(racketCollision :: _)
-    bouncingBall
   }
-  val balls = List(
-    makeBall(200d, 150d),
-    makeBall(-200d, 100d))
+
+  trait OpponentRegistry extends Remote {
+    @throws[RemoteException] def setOpponentInput(inputY: Signal[Int]): Unit
+  }
+  object regImpl extends UnicastRemoteObject with OpponentRegistry {
+    override def setOpponentInput(inputY: rescala.Signal[Int]): Unit = {
+      val racket2 = new Racket(playingField.width, false, playingField.height, inputY)
+      shapes.transform(racket2.shape :: _)
+      for(bouncingBall <- balls) {
+        bouncingBall.horizontalBounceSources.transform(racket2.collisionWith(bouncingBall.shape) :: _)
+      }
+    }
+  }
+  Naming.rebind("opponentRegistry", regImpl)
 }
