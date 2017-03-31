@@ -1,5 +1,7 @@
 package rescala.reactives
 
+import java.io.ObjectStreamException
+
 import rescala.engine.{Engine, TurnSource}
 import rescala.graph.{Base, Disconnectable, Pulse, Pulsing, Reactive, ReevaluationResult, Struct}
 import rescala.propagation.Turn
@@ -68,7 +70,7 @@ object Observe {
   * @tparam P Value type stored by the pulse of the reactive value
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
-trait Observable[+P, S <: Struct] {
+trait Observable[+P, S <: Struct] extends Serializable {
   this : Pulsing[Pulse[P], S] =>
   /** add an observer */
   final def observe(
