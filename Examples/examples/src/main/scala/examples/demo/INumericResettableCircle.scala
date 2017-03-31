@@ -46,13 +46,12 @@ object INumericResettableCircle extends Main {
   val shapes = Var[List[Shape]](List.empty)
   val panel = new ShapesPanel(shapes)
 
-  val angle = Clock.nsTime.map( _.toDouble / Clock.NanoSecond * math.Pi)
+  val angle = Clock.nsTime.map(_.toDouble / Clock.NanoSecond * math.Pi)
 
-  val velocityX = Signal{ (panel.width() / 2 - 50).toDouble * math.sin(angle()) / Clock.NanoSecond }
-  val velocityY = Signal{ (panel.height() / 2 - 50).toDouble * math.cos(angle()) / Clock.NanoSecond }
+  val velocityX = Signal {(panel.width() / 2 - 50).toDouble * math.sin(angle()) / Clock.NanoSecond}
+  val velocityY = Signal {(panel.height() / 2 - 50).toDouble * math.cos(angle()) / Clock.NanoSecond}
 
-  //TODO: why not zipOuter?
-  val resetOrTick = Event { Some((panel.Mouse.middleButton.pressed(), Clock.ticks())) }
+  val resetOrTick = Event {Some((panel.Mouse.middleButton.pressed(), Clock.ticks()))}
 
   val posX = resetOrTick.fold(0d){
     case (_, (Some(Point(x, _)), _)) => x.toDouble

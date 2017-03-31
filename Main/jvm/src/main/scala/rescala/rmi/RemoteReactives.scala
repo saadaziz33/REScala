@@ -8,7 +8,7 @@ import rescala.graph.Pulse
 
 object RemoteReactives {
   def rebind[A](name: String, signal: rescala.Signal[A]): Unit = Naming.rebind(name, new RemoteSenderImpl(signal))
-  def lookupSignal[A](name: String): rescala.Signal[A] = from(Naming.lookup(name).asInstanceOf[RemoteSender[A]])
+  def lookupSignal[A](name: String): rescala.Signal[A] = from(Naming.lookup("rmi://"+name).asInstanceOf[RemoteSender[A]])
 
   def from[A](rs: RemoteSender[A]): rescala.Signal[A] = {
     lazy val inner: rescala.Var[A] = rescala.Var(rs.registerRemoteDependant(new RemoteReceiverImpl[A] {

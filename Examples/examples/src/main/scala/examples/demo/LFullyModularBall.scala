@@ -57,13 +57,12 @@ object LFullyModularBall extends Main {
     val horizontalBounceSources: Var[List[Event[Any]]] = Var(List())
     val verticalBounceSources: Var[List[Event[Any]]] = Var(List())
 
-    //TODO: added type annotations for documentation purposes, also makes IDE happy
     val velocityX = horizontalBounceSources.flatten[Event[List[Option[Any]]]]
                     .fold(initVx / Clock.NanoSecond) { (old, _) => -old }
     val velocityY = verticalBounceSources.flatten[Event[List[Option[Any]]]]
                     .fold(initVy / Clock.NanoSecond) { (old, _ ) => -old }
 
-    val resetOrTick = Event { Some((reset(), Clock.ticks())) }
+    val resetOrTick = Event {Some((reset(), Clock.ticks()))}
 
   val posX = resetOrTick.fold(0d){
     case (_, (Some(Point(x, _)), _)) => x.toDouble

@@ -18,10 +18,10 @@ object HPurifiedClockCircle extends Main {
   val shapes = Var[List[Shape]](List.empty)
   val panel = new ShapesPanel(shapes)
 
-  val angle = Clock.nsTime.map( _.toDouble / Clock.NanoSecond * math.Pi)
+  val angle = Clock.nsTime.map(_.toDouble / Clock.NanoSecond * math.Pi)
 
-  val velocityX = Signal{ (panel.width() / 2 - 50).toDouble * math.sin(angle()) / Clock.NanoSecond }
-  val velocityY = Signal{ (panel.height() / 2 - 50).toDouble * math.cos(angle()) / Clock.NanoSecond }
+  val velocityX = Signal {(panel.width() / 2 - 50).toDouble * math.sin(angle()) / Clock.NanoSecond}
+  val velocityY = Signal {(panel.height() / 2 - 50).toDouble * math.cos(angle()) / Clock.NanoSecond}
 
   val posX = Clock.ticks.fold(0d){ (pX, tick) => pX + tick.toDouble * velocityX.before }
   val posY = Clock.ticks.fold(0d){ (pY, tick) => pY + tick.toDouble * velocityY.before }
