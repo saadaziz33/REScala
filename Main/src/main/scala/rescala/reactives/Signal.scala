@@ -70,6 +70,7 @@ trait Signal[+A, S <: Struct] extends Pulsing[Pulse[A], S] with Observable[A, S]
     * Be aware that no change will be triggered when the signal changes to or from empty */
   final def change(implicit ticket: TurnSource[S]): Event[Diff[A], S] = Events.change(this)
 
+  final def diff(implicit ticket: TurnSource[S]): Event[(A, A), S] = change.map(diff => diff.from.get -> diff.to.get)
   /**
     * Create an event that fires every time the signal changes. The value associated
     * to the event is the new value of the signal
