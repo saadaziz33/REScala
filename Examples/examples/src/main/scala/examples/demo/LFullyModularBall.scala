@@ -64,14 +64,14 @@ object LFullyModularBall extends Main {
 
     val resetOrTick = Event {Some((reset(), Clock.ticks()))}
 
-  val posX = resetOrTick.fold(0d){
-    case (_, (Some(Point(x, _)), _)) => x.toDouble
-    case (pX, (None, Some(tick))) => pX + tick.toDouble * velocityX.before
-  }
-  val posY = resetOrTick.fold(0d){
-    case (_, (Some(Point(_, y)), _)) => y.toDouble
-    case (pY, (None, Some(tick))) => pY + tick.toDouble * velocityY.before
-  }
+    val posX = resetOrTick.fold(0d){
+      case (_, (Some(Point(x, _)), _)) => x.toDouble
+      case (pX, (None, Some(tick))) => pX + tick.toDouble * velocityX.before
+    }
+    val posY = resetOrTick.fold(0d){
+      case (_, (Some(Point(_, y)), _)) => y.toDouble
+      case (pY, (None, Some(tick))) => pY + tick.toDouble * velocityY.before
+    }
 
     val shape = new Circle(posX.map(_.toInt), posY.map(_.toInt), diameter)
   }
