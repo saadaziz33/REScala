@@ -69,6 +69,7 @@ trait Signal[+A, S <: Struct] extends Pulsing[Pulse[A], S] with Observable[A, S]
   /** Create an event that fires every time the signal changes. It fires the tuple (oldVal, newVal) for the signal.
     * Be aware that no change will be triggered when the signal changes to or from empty */
   final def change(implicit ticket: TurnSource[S]): Event[Diff[A], S] = Events.change(this)
+  final def diff(implicit ticket: TurnSource[S]): Event[Diff[A], S] = change
 
   /**
     * Create an event that fires every time the signal changes. The value associated
