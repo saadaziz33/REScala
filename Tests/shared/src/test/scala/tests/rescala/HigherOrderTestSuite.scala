@@ -1,11 +1,6 @@
 package tests.rescala
 
 
-
-
-
-
-
 class HigherOrderTestSuite extends RETests {
 
 
@@ -344,9 +339,9 @@ class HigherOrderTestSuite extends RETests {
 
   allEngines("flatten Signal Option"){ engine => import engine._
     val v = Var(Option.empty[Var[Int]])
-    var w = Var(1)
+    val w = Var(1)
 
-    val flat = v.flatten
+    val flat: Signal[Option[Int]] = v.flatten
 
     assert(flat.now === None, "flatten fails")
 
@@ -357,6 +352,31 @@ class HigherOrderTestSuite extends RETests {
     w.set(100)
 
     assert(flat.now === Some(100), "flatten fails 3")
+  }
+
+  allEngines("create changes during reevaluation"){ engine => import engine._
+    val v = Var(1)
+    val mapped = v.map(_ + 0)
+
+    val sm = Signal { mapped.change.apply() }
+    val sd = dynamic() {t => t.depend(mapped.change(t)) }
+
+
+    //intercept[NoSuchElementException](sm.now)
+    assert(sm.now.isEmpty)
+    assert(sd.now.isEmpty)
+
+    v.set(2)
+
+    assert(sm.now.get.pair == 1 -> 2)
+    assert(sd.now.get.pair == 1 -> 2)
+
+    v.set(3)
+
+    assert(sm.now.get.pair == 2 -> 3)
+    assert(sd.now.get.pair == 2 -> 3)
+
+
   }
 
 }

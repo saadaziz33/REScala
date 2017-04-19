@@ -3,11 +3,6 @@ package tests.rescala
 
 import rescala.Infiltrator.assertLevel
 
-
-
-
-
-
 class MacroTestSuite extends RETests {
 
 
@@ -199,14 +194,14 @@ class MacroTestSuite extends RETests {
     val outside = Var(1)
     val inside = Var(10)
 
-    def sig = Signal { outside() }
+    def sig()(implicit turnSource: TurnSource) = Signal { outside() }
 
     val testsig = Signal {
       {
         def sig = Signal { inside() }
         sig()
       }
-      sig()
+      sig().apply()
     }
 
     assert(testsig.now === 1)
@@ -393,7 +388,7 @@ class MacroTestSuite extends RETests {
 
   allEngines("chained Signals1"){ engine => import engine._
 
- import scala.language.reflectiveCalls
+    import scala.language.reflectiveCalls
 
     val v1 = Var { 1 }
     val v2 = Var { 2 }
@@ -412,7 +407,7 @@ class MacroTestSuite extends RETests {
 
   allEngines("chained Signals2"){ engine => import engine._
 
- import scala.language.reflectiveCalls
+    import scala.language.reflectiveCalls
 
     val v1 = Var { 20 }
     val v2 = Var { new {def signal = Signal { v1() } } }
@@ -478,7 +473,7 @@ class MacroTestSuite extends RETests {
     val macroRes = Signal {
       newSignal()()
     }
-    val normalRes = Signals.dynamic() { t: ReevaluationTicket =>
+    val normalRes = Signals.dynamic() { t: DynamicTicket =>
       t.depend(newSignal())
     }
     assert(macroRes.now === 0, "before, macro")
