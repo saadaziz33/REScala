@@ -1,11 +1,12 @@
 package rescala.reactives
 
 import rescala.engine.{Engine, TurnSource}
-import rescala.graph._
+import rescala.graph.{Pulse, Pulsing, Struct}
 import rescala.propagation.Turn
 import rescala.reactives.RExceptions.{EmptySignalControlThrowable, UnhandledFailureException}
 import rescala.reactives.Signals.Diff
 
+import scala.annotation.compileTimeOnly
 import scala.language.higherKinds
 import scala.util.control.NonFatal
 
@@ -18,10 +19,30 @@ import scala.util.control.NonFatal
   * @tparam A Type stored by the signal
   * @tparam S Struct type used for the propagation of the signal
   */
-trait Signal[+A, R] extends PersistentAccessibleNode[A, R] with PersistentReevaluation[A, R] with Disconnectable[R] with Observable[A, R] {
+trait Signal[+A, S <: Struct] extends Pulsing[Pulse[A], S] with Observable[A, S] {
+
+  // only used inside macro and will be replaced there
+  @compileTimeOnly("Signal.apply can only be used inside of Signal expressions")
+  final def apply(): A = throw new IllegalAccessException(s"$this.apply called outside of macro")
+
+
+  final def now(implicit ticket: TurnSource[S]): A = ticket { turn =>
+    turn.dynamicDependencyInteraction(this)
+    try { pulse(turn.makeTicket()).get }
+    catch {
+      case EmptySignalControlThrowable => throw new NoSuchElementException(s"Signal $this is empty")
+      case other: Throwable => throw new IllegalStateException("Signal has an error value", other)
+    }
+  }
+
+  final def before(implicit ticket: TurnSource[S]): A = ticket { turn =>
+    turn.dynamicDependencyInteraction(this)
+    try { stable(turn.makeTicket()).get }
+    catch { case EmptySignalControlThrowable => throw new NoSuchElementException(s"Signal $this is empty") }
+  }
 
   final def recover[R >: A](onFailure: PartialFunction[Throwable,R])(implicit ticket: TurnSource[S]): Signal[R, S] = Signals.static(this) { turn =>
-    try this.regRead(turn) catch {
+    try this.pulse(turn).get catch {
       case NonFatal(e) => onFailure.applyOrElse[Throwable, R](e, throw _)
     }
   }
@@ -30,7 +51,7 @@ trait Signal[+A, R] extends PersistentAccessibleNode[A, R] with PersistentReeval
   final def abortOnError()(implicit ticket: TurnSource[S]): Signal[A, S] = recover{case t => throw new UnhandledFailureException(this, t)}
 
   final def withDefault[R >: A](value: R)(implicit ticket: TurnSource[S]): Signal[R, S] = Signals.static(this) { (turn) =>
-    try this.regRead(turn) catch {
+    try pulse(turn).get catch {
       case EmptySignalControlThrowable => value
     }
   }
@@ -41,21 +62,14 @@ trait Signal[+A, R] extends PersistentAccessibleNode[A, R] with PersistentReeval
   final def map[B](f: A => B)(implicit ticket: TurnSource[S]): Signal[B, S] = Signals.lift(this)(f)
 
   /** flatten the inner reactive */
-  final def flatten[R](implicit ev: Flatten[A, S, R], ticket: TurnSource[S]): R = ev.apply(this)
+  final def flatten[R](implicit ev: Flatten[A, S, R], ticket: TurnSource[S]): R = ev.apply(this)(ticket)
 
   /** Delays this signal by n occurrences */
-  final def delay(n: Int)(implicit ticket: TurnSource[S]): Signal[A, S] = ticket { implicit turn => changed.delay(this.regRead, n) }
+  final def delay(n: Int)(implicit ticket: TurnSource[S]): Signal[A, S] = ticket { implicit turn => changed.delay(now, n) }
 
   /** Create an event that fires every time the signal changes. It fires the tuple (oldVal, newVal) for the signal.
     * Be aware that no change will be triggered when the signal changes to or from empty */
-  final def change(implicit ticket: TurnSource[S]): Event[Diff[A], S] = {
-    Events.static(s"(change $this)", this) { turn =>
-      val from = stable(turn)
-      val to = pulse(turn)
-      if (from != to) Pulse.Change(Signals.Diff(from, to))
-      else Pulse.NoChange
-    }
-  }
+  final def change(implicit ticket: TurnSource[S]): Event[Diff[A], S] = Events.change(this)
 
   /**
     * Create an event that fires every time the signal changes. The value associated

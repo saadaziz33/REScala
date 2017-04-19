@@ -1,9 +1,9 @@
 package rescala.macros
 
-import rescala.graph.{PulseOption, Stateful, Struct}
-import rescala.propagation.DynamicReevaluationTicket
+import rescala.engine.{LowPriorityTurnSource, TurnSource}
+import rescala.graph.Struct
+import rescala.propagation.DynamicTicket
 import rescala.reactives.{Event, Signal}
-
 import retypecheck._
 
 import scala.language.experimental.macros
@@ -71,9 +71,9 @@ object ReactiveMacros {
 
     // the name of the generated turn argument passed to the signal closure
     // every Signal { ... } macro instance gets expanded into a dynamic signal
-    val signalSyntArgName = TermName(c.freshName("s$"))
-    val signalSyntArgIdent = Ident(signalSyntArgName)
-    internal setType(signalSyntArgIdent, weakTypeOf[DynamicReevaluationTicket[S]])
+    val signalMacroArgumentName = TermName(c.freshName("s$"))
+    val signalSyntArgIdent = Ident(signalMacroArgumentName)
+    internal setType(signalSyntArgIdent, weakTypeOf[DynamicTicket[S]])
 
     // the signal values that will be cut out of the Signal expression
     var cutOutSignals = List[ValDef]()
@@ -97,17 +97,21 @@ object ReactiveMacros {
         else
           !(tree.tpe <:< definitions.NullTpe) &&
           !(tree.tpe <:< definitions.NothingTpe) &&
-          (tree.tpe <:< typeOf[Stateful[_, _]] || tree.tpe <:< typeOf[PulseOption[_, _]])
+          (tree.tpe <:< typeOf[Signal[_, _]] || tree.tpe <:< typeOf[Event[_, _]])
 
       private def isStatefulReactive(tree: Tree) =
         if (tree.tpe == null) { treeTypeNullWarning(); false }
         else
           !(tree.tpe <:< definitions.NullTpe) &&
           !(tree.tpe <:< definitions.NothingTpe) &&
-          tree.tpe <:< typeOf[Stateful[_, _]]
+          tree.tpe <:< typeOf[Signal[_, _]]
 
       override def transform(tree: Tree): Tree =
         tree match {
+          // replace any used TurnSource in a Signal expression with the correct turn source for the current turn
+          case turnSource@q"$_.fromEngineImplicit[..$_](...$_)" if turnSource.tpe =:= weakTypeOf[TurnSource[S]] && turnSource.symbol.owner == symbolOf[LowPriorityTurnSource] =>
+            q"${termNames.ROOTPKG}.rescala.engine.TurnSource.fromDynamicTicket($signalMacroArgumentName)"
+
           // pass the SignalSynt argument to every reactive
           // to obtain dynamic dependencies
           //
@@ -229,7 +233,7 @@ object ReactiveMacros {
     val innerTree = transformer transform expression.tree
 
     // SignalSynt argument function
-    val signalExpression = q"{$signalSyntArgName: ${ weakTypeOf[DynamicReevaluationTicket[S]] } => $innerTree }"
+    val signalExpression = q"{$signalMacroArgumentName: ${ weakTypeOf[DynamicTicket[S]] } => $innerTree }"
 
     // upper bound parameters, only use static outside declarations
     // note that this potentially misses many dependencies

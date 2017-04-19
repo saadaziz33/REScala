@@ -1,3 +1,5 @@
+import sbtcrossproject.{crossProject, CrossType}
+
 organization in ThisBuild := "de.tuda.stg"
 crossScalaVersions in ThisBuild := Seq("2.12.1", "2.11.8")
 scalaVersion in ThisBuild := crossScalaVersions.value.head
@@ -18,30 +20,29 @@ shellPrompt in ThisBuild := { state => Project.extract(state).currentRef.project
 lazy val rescalaAggregate = project.in(file(".")).aggregate(rescalaJVM,
   rescalaJS, microbench, reswing, examples, examplesReswing, caseStudyEditor,
   caseStudyRSSEvents, caseStudyRSSReactive, caseStudyRSSSimple, rescalatags,
-  datastructures, universe, reactiveStreams, documentation, meta, pipelining,
+  datastructures, universe, reactiveStreams, documentation, meta,
   stm, testsJVM, testsJS, fullmv, caseStudyShapes, caseStudyMill)
   .settings(
     publish := {},
     publishLocal := {})
 
 
-lazy val rescala = crossProject.in(file("Main"))
+lazy val rescala = crossProject(JSPlatform, JVMPlatform).in(file("Main"))
   .disablePlugins(JmhPlugin)
   .settings(
     name := "rescala",
     resolvers += Resolver.bintrayRepo("pweisenburger", "maven"),
     libraryDependencies += "de.tuda.stg" %% "retypecheck" % "0.1.0",
     libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value,
-    scalatestDependency,
 
     sourceGenerators in Compile += Def.task {
       val file = (sourceManaged in Compile).value / "rescala" / "reactives" / "GeneratedSignalLift.scala"
       val definitions = (1 to 22).map{ i =>
         val params = 1 to i map ("n" + _)
         val types = 1 to i map ("A" + _)
-        val signals = params zip types map {case (p, t) => s"$p: Stateful[$t, S]"}
+        val signals = params zip types map {case (p, t) => s"$p: Signal[$t, S]"}
         def sep(l: Seq[String]) = l.mkString(", ")
-        val getValues = params map (_ + ".regRead(t)")
+        val getValues = params map (_ + ".pulse(t).get")
         s"""  def lift[${sep(types)}, B, S <: Struct](${sep(signals)})(fun: (${sep(types)}) => B)(implicit maybe: TurnSource[S]): Signal[B, S] = {
            |    static(${sep(params)})(t => fun(${sep(getValues)}))
            |  }
@@ -65,13 +66,19 @@ lazy val rescala = crossProject.in(file("Main"))
       s"""import rescala._
        """.stripMargin
   )
-  .jvmSettings().jsSettings(scalaJSUseRhino in Global := true)
+  .jvmSettings()
+  .jsSettings(scalaJSUseRhino in Global := true)
+//  .nativeSettings(
+//    crossScalaVersions := Seq("2.11.8"),
+//    scalaVersion := "2.11.8")
 
 lazy val rescalaJVM = rescala.jvm
 
 lazy val rescalaJS = rescala.js
 
-lazy val tests = crossProject.in(file("Tests"))
+//lazy val rescalaNative = rescala.native
+
+lazy val tests = crossProject(JSPlatform, JVMPlatform).in(file("Tests"))
   .disablePlugins(JmhPlugin)
   .settings(
     name := "rescala-tests",
@@ -83,7 +90,7 @@ lazy val tests = crossProject.in(file("Tests"))
   .dependsOn(rescala)
   .jvmSettings().jsSettings(scalaJSUseRhino in Global := true)
 
-lazy val testsJVM = tests.jvm.dependsOn(stm, pipelining)
+lazy val testsJVM = tests.jvm.dependsOn(stm)
 
 lazy val testsJS = tests.js
 
@@ -134,14 +141,6 @@ lazy val datastructures = project.in(file("Extensions/Datastructures"))
     publish := {},
     publishLocal := {},
     scalatestDependency
-  )
-
-lazy val pipelining = project.in(file("Extensions/Pipelining"))
-  .dependsOn(rescalaJVM)
-  .settings(
-    scalatestDependency,
-    publish := {},
-    publishLocal := {}
   )
 
 lazy val stm = project.in(file("Extensions/STM"))
@@ -239,7 +238,6 @@ lazy val fullmv = project.in(file("Research/Multiversion"))
     publish := {},
     publishLocal := {},
     scalatestDependency)
-  .dependsOn(rescalaJVM)
   .dependsOn(RootProject(uri("git://github.com/misterd123/gs-ui")))
 
 lazy val meta = project.in(file("Research/Meta"))

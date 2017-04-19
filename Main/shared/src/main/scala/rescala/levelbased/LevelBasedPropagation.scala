@@ -1,7 +1,7 @@
 package rescala.levelbased
 
 import rescala.graph.ReevaluationResult.{Dynamic, Static}
-import rescala.graph.Reactive
+import rescala.graph.{DepDiff, Reactive}
 import rescala.twoversion.CommonPropagationImpl
 
 /**
@@ -10,61 +10,71 @@ import rescala.twoversion.CommonPropagationImpl
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
 trait LevelBasedPropagation[S <: LevelStruct] extends CommonPropagationImpl[S] with LevelQueue.Evaluator[S] {
-
-
-  implicit def currentTurn: LevelBasedPropagation[S] = this
-
-
   private var _evaluated = List.empty[Reactive[S]]
 
-  val levelQueue = new LevelQueue[S](this)
+  val levelQueue = new LevelQueue[S](this)(this)
 
-  def evaluate(head: Reactive[S]): Unit = {
+  def evaluate(head: Reactive[S], ticket: S#Ticket[S]): Unit = {
 
     def requeue(changed: Boolean, level: Int, redo: Boolean): Unit =
       if (redo) levelQueue.enqueue(level, changed)(head)
-      else if (changed) head.state.outgoing.foreach(levelQueue.enqueue(level, changed))
+      else if (changed) head.state.outgoing(this).foreach(levelQueue.enqueue(level, changed))
 
-    head.reevaluate() match {
-      case Static(hasChanged) =>
-        requeue(hasChanged, level = -42, redo = false)
-      case Dynamic(hasChanged, diff) =>
+    head.reevaluate(ticket) match {
+      case Static(value) =>
+        if (value.isDefined) {
+          head.state.set(value.get)(ticket)
+          requeue(changed = true, level = -42, redo = false)
+        }
+      case Dynamic(value, deps) =>
+        val diff = DepDiff(deps, head.state.incoming(this))
         applyDiff(head, diff)
         val newLevel = maximumLevel(diff.novel) + 1
-        requeue(hasChanged, newLevel, redo = head.state.level < newLevel)
+        val redo = head.state.level(this) < newLevel
+        val hasChanged = value.isDefined
+        if (!redo && hasChanged) {
+          head.state.set(value.get)(ticket)
+        }
+        requeue(hasChanged, newLevel, redo)
     }
     _evaluated ::= head
 
   }
 
-  private def maximumLevel(dependencies: Set[Reactive[S]]): Int = dependencies.foldLeft(-1)((acc, r) => math.max(acc, r.state.level))
+  private def maximumLevel(dependencies: Set[Reactive[S]]): Int = dependencies.foldLeft(-1)((acc, r) => math.max(acc, r.state.level(this)))
 
 
   override def create[T <: Reactive[S]](dependencies: Set[Reactive[S]], dynamic: Boolean)(f: => T): T = {
+    implicit val ticket: S#Ticket[S] = makeTicket()
+
     val reactive = f
     val level = ensureLevel(reactive, dependencies)
-    if (dynamic) evaluate(reactive)
+    if (dynamic) evaluate(reactive, ticket)
     else {
       dependencies.foreach(discover(reactive))
       if (level <= levelQueue.currentLevel() && dependencies.exists(_evaluated.contains)) {
-        evaluate(reactive)
+        evaluate(reactive, ticket)
       }
     }
     reactive
   }
 
-  def ensureLevel(dependant: Reactive[S], dependencies: Set[Reactive[S]]): Int =
+  def ensureLevel(dependant: Reactive[S], dependencies: Set[Reactive[S]])(implicit ticket: S#Ticket[S]): Int =
     if (dependencies.isEmpty) 0
     else {
-      val newLevel = dependencies.map(_.state.level).max + 1
-      dependant.state.updateLevel(newLevel)
+      val newLevel = dependencies.map(_.state.level(this)).max + 1
+      dependant.state.updateLevel(newLevel)(this)
     }
 
   /** allow turn to handle dynamic access to reactives */
   override def dynamicDependencyInteraction(dependency: Reactive[S]): Unit = ()
 
-  override def preparationPhase(initialWrites: Traversable[Reactive[S]]): Unit = initialWrites.foreach { reactive =>
-    levelQueue.enqueue(reactive.state.level)(reactive)
+  override def preparationPhase(initialWrites: Traversable[Reactive[S]]): Unit = {
+    implicit val ticket: S#Ticket[S] = makeTicket()
+
+    initialWrites.foreach { reactive =>
+      levelQueue.enqueue(reactive.state.level(this))(reactive)
+    }
   }
 
   def propagationPhase(): Unit = levelQueue.evaluateQueue()

@@ -6,6 +6,7 @@ import rescala.graph._
 import rescala.propagation.Turn
 import rescala.reactives.RExceptions.{EmptySignalControlThrowable, UnhandledFailureException}
 
+import scala.annotation.compileTimeOnly
 import scala.collection.immutable.{LinearSeq, Queue}
 import scala.language.higherKinds
 
@@ -18,21 +19,24 @@ import scala.language.higherKinds
   * @tparam T Type returned when the event fires
   * @tparam S Struct type used for the propagation of the event
   */
-trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluation[T, R] with Disconnectable[R] with Observable[T, R] {
+trait Event[+T, S <: Struct] extends Pulsing[Pulse[T], S] with Observable[T, S] {
+
+  @compileTimeOnly("Event.apply can only be used inside of Signal expressions")
+  def apply(): Option[T] = throw new IllegalAccessException(s"$this.apply called outside of macro")
 
   def disconnect()(implicit engine: Engine[S, Turn[S]]): Unit
 
 
   /** collect results from a partial function */
-  final def collect[U](pf: PartialFunction[T, U])(implicit ticket: TurnSource[S]): Event[U, S] = Events.static(s"(collect $this)", this) { turn => Pulse.fromOption(regRead(turn).flatMap(pf.lift)) }
+  final def collect[U](pf: PartialFunction[T, U])(implicit ticket: TurnSource[S]): Event[U, S] = Events.static(s"(collect $this)", this) { turn => pulse(turn).collect(pf) }
 
   /** add an observer */
   final def +=(react: T => Unit)(implicit ticket: TurnSource[S]): Observe[S] = observe(react)(ticket)
 
 
-  final def recover[R >: T](onFailure: PartialFunction[Throwable,R])(implicit ticket: TurnSource[S]): Event[R, S] = Events.static(s"(recover $this)", this) { turn =>
+  final def recover[R >: T](onFailure: PartialFunction[Throwable,Option[R]])(implicit ticket: TurnSource[S]): Event[R, S] = Events.static(s"(recover $this)", this) { turn =>
     pulse(turn) match {
-      case Exceptional(t) => Pulse.Change(onFailure.applyOrElse[Throwable, R](t, throw _))
+      case Exceptional(t) => onFailure.applyOrElse[Throwable, Option[R]](t, throw _).fold[Pulse[R]](Pulse.NoChange)(Pulse.Change(_))
       case other => other
     }
   }
@@ -78,6 +82,15 @@ trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluat
   /** Event conjunction with a merge method creating a tuple of both event parameters */
   final def zip[U](other: Event[U, S])(implicit ticket: TurnSource[S]): Event[(T, U), S] = and(other)(Tuple2.apply)
 
+  /** Event disjunction with a merge method creating a tuple of both optional event parameters wrapped */
+  final def zipOuter[U](other: Event[U, S])(implicit ticket: TurnSource[S]): Event[(Option[T], Option[U]), S] = {
+    Events.static(s"(zipOuter $this $other)", this, other) { turn =>
+      val left = this.pulse(turn)
+      val right = other.pulse(turn)
+      if(right.isChange || left.isChange) Change(left.toOption -> right.toOption) else NoChange
+    }
+  }
+
   /** Transform the event parameter */
   final def map[U](mapping: T => U)(implicit ticket: TurnSource[S]): Event[U, S] = Events.static(s"(map $this)", this) { turn => pulse(turn).map(mapping) }
 
@@ -94,8 +107,8 @@ trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluat
 
   /** folds events with a given fold function to create a Signal allowing recovery of exceptional states by ignoring the stable value */
   final def lazyFold[A](init: => A)(folder: (=> A, => T) => A)(implicit ticket: TurnSource[S]): Signal[A, S] = ticket { initialTurn =>
-    Signals.Impl.makeStatic(Set[Reactive[S]](this), init) { (turn, currentValue) =>
-      regRead(turn).fold(currentValue)(value => folder(currentValue, value))
+    Signals.Impl.makeFold[A, S](Set[Reactive[S]](this), _ => init) { (turn, currentValue) =>
+      pulse(turn).toOption.fold(currentValue)(value => folder(currentValue, value))
     }(initialTurn)
   }
 
@@ -149,8 +162,8 @@ trait Event[+T, R] extends TransientAccessibleNode[T, R] with TransientReevaluat
 
   /** Return a Signal that is updated only when e fires, and has the value of the signal s */
   final def snapshot[A](s: Signal[A, S])(implicit ticket: TurnSource[S]): Signal[A, S] = ticket { turn =>
-    Signals.Impl.makeStatic(Set[Reactive[S]](this, s), s.regRead(turn)) { (t, current) =>
-      this.regRead(t).fold(current)(_ => s.regRead(t))
+    Signals.Impl.makeFold[A, S](Set[Reactive[S]](this, s), st => s.pulse(st).get) { (t, current) =>
+      pulse(t).toOption.fold(current)(_ => s.pulse(t).get)
     }(turn)
   }
 

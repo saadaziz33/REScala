@@ -1,6 +1,7 @@
 package rescala.twoversion
 
-import rescala.graph.{ChangableGraphStruct, DepDiff, Reactive}
+import rescala.graph.{ATicket, DepDiff, GraphStruct, Reactive}
+import rescala.propagation.{DynamicTicket, StaticTicket}
 
 import scala.util.control.NonFatal
 
@@ -10,27 +11,34 @@ import scala.util.control.NonFatal
   *
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
-trait CommonPropagationImpl[S <: ChangableGraphStruct] extends AbstractPropagation[S] {
-  private val toCommit = new java.util.ArrayList[Committable]()
-  private val observers = new java.util.ArrayList[() => Unit]()
+trait CommonPropagationImpl[S <: GraphStruct] extends AbstractPropagation[S] {
+  outer =>
 
-  override def schedule(commitable: Committable): Unit = toCommit.add(commitable)
+  def makeTicket(): S#Ticket[S] = new ATicket[S] {
+    override def dynamic(): DynamicTicket[S] = new DynamicTicket[S](turn, this)
+    override def static(): StaticTicket[S] = new StaticTicket[S](turn, this)
+    override def turn(): CommonPropagationImpl[S] = outer
+  }
 
-  override def observe(f: () => Unit): Unit = observers.add(f)
+  private val toCommit = scala.collection.mutable.ArrayBuffer[Committable[S]]()
+  private val observers = scala.collection.mutable.ArrayBuffer[() => Unit]()
 
+  override def schedule(commitable: Committable[S]): Unit = toCommit += commitable
+
+  override def observe(f: () => Unit): Unit = observers += f
 
   override def commitPhase(): Unit = {
-    val it = toCommit.iterator()
+    val it = toCommit.iterator
     while (it.hasNext) it.next().commit(this)
   }
 
   override def rollbackPhase(): Unit = {
-    val it = toCommit.iterator()
+    val it = toCommit.iterator
     while (it.hasNext) it.next().release(this)
   }
 
   override def observerPhase(): Unit = {
-    val it = observers.iterator()
+    val it = observers.iterator
     var failure: Throwable = null
     while (it.hasNext) {
       try {
@@ -55,7 +63,6 @@ trait CommonPropagationImpl[S <: ChangableGraphStruct] extends AbstractPropagati
     diff.removed foreach drop(head)
     diff.added foreach discover(head)
   }
-
 
 
 }

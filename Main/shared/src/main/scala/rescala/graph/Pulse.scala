@@ -69,12 +69,30 @@ sealed trait Pulse[+P] {
     case ex@Exceptional(_) => ex
   }
 
+  def collect[U](pf: PartialFunction[P, U]): Pulse[U] = this match {
+    case Change(value) => pf.andThen(Pulse.Change(_)).applyOrElse[P, Pulse[U]](value, _ => NoChange)
+    case NoChange => NoChange
+    case ex@Exceptional(_) => ex
+  }
+
   /** converts the pulse to an option of try */
   def toOptionTry: Option[Try[P]] = this match {
     case Change(up) => Some(Success(up))
     case NoChange => None
     case Pulse.empty => None
     case Exceptional(t) => Some(Failure(t))
+  }
+
+  def toOption: Option[P] = this match {
+    case Change(update) => Some(update)
+    case NoChange => None
+    case Exceptional(t) => throw t
+  }
+
+  def get: P = this match {
+    case Change(value) => value
+    case Exceptional(t) => throw t
+    case NoChange => throw new NoSuchElementException("Tried to access the value of a NoChange Pulse")
   }
 }
 
@@ -101,7 +119,7 @@ object Pulse {
     case ex@Exceptional(t) => Change(newValue)
   }
 
-  /** wrap a pulse generating function to store everntual exceptions into an exceptional pulse */
+  /** wrap a pulse generating function to store eventual exceptions into an exceptional pulse */
   def tryCatch[P](f: => Pulse[P], onEmpty: Pulse[P] = Pulse.empty): Pulse[P] = try f catch {
     case ufe: UnhandledFailureException => throw ufe
     case EmptySignalControlThrowable => onEmpty
@@ -121,9 +139,4 @@ object Pulse {
 
   /** Pulse indicating an exception */
   final case class Exceptional(throwable: Throwable) extends Pulse[Nothing]
-}
-
-object RPValueWrappers {
-  type PersistentValue[V] = Pulse[V]
-  type TransientPulse[P] = Pulse[P]
 }

@@ -1,6 +1,6 @@
 package rescala.propagation
 
-import rescala.graph.{Pulse, Reactive, Struct}
+import rescala.graph.{Reactive, Struct}
 import rescala.twoversion.Committable
 
 /**
@@ -8,19 +8,12 @@ import rescala.twoversion.Committable
   *
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
-trait Turn[R] {
-  final protected[rescala] val staticReevaluationTicket = new StaticReevaluationTicket[R](this)
-  /**
-    * Creates a new spore initialized with the given parameters
-    *
-    * @param initialValue    Initially stored pulse of the spore
-    * @param transient       Indicates if the spore is transient (meaning that updates to it's pulse are reverted when committing)
-    * @param initialIncoming Initial incoming dependencies of the spore
-    * @tparam P Stored pulse value type
-    * @tparam R Reactive value type of the incoming dependencies of the spore
-    * @return
-    */
-  private[rescala] def makeStructState[P, R](initialValue: Pulse[P] = Pulse.NoChange, transient: Boolean = true, initialIncoming: Set[R] = Set.empty[R]): S#StructType[P, R]
+trait Turn[S <: Struct] {
+  outer =>
+  private[rescala] def makeStructState[P](initialValue: P, transient: Boolean = true, initialIncoming: Set[Reactive[S]] = Set.empty[Reactive[S]], hasState: Boolean = false): S#Type[P, S]
+
+
+  def makeTicket(): S#Ticket[S]
 
   /**
     * Called to allow turn to handle dynamic access to reactive elements
@@ -46,7 +39,7 @@ trait Turn[R] {
     *
     * @param committable Commitable element to be scheduled
     */
-  def schedule(committable: Committable): Unit
+  def schedule(committable: Committable[S]): Unit
 
   /**
     * Registers a new handler function that is called after all changes were written and committed.
