@@ -1,7 +1,12 @@
 package rescala.graph
 
-import rescala.propagation.StaticTicket
+import rescala.engine.Turn
 import rescala.util.Globals
+
+import scala.language.higherKinds
+
+
+trait Struct { type State[P, S <: Struct] }
 
 /**
   * A reactive value is something that can be reevaluated
@@ -20,7 +25,7 @@ trait Reactive[S <: Struct] {
     */
   protected[rescala] def state: S#State[Value, S]
 
-  protected[rescala] def reevaluate(ticket: S#Ticket[S]): ReevaluationResult[Value, S]
+  protected[rescala] def reevaluate(turn: Turn[S]): ReevaluationResult[Value, S]
 
   /** for debugging */
   private val name = Globals.declarationLocationName()
@@ -34,9 +39,7 @@ trait Reactive[S <: Struct] {
   * @tparam S Struct type that defines the spore type used to manage the reactive evaluation
   */
 trait Pulsing[+P, S <: Struct] extends Reactive[S] {
-  protected[rescala] def stable(implicit ticket: S#Ticket[S]): P
-  protected[rescala] def pulse(implicit ticket: S#Ticket[S]): P
-  protected[rescala] def pulse(implicit ticket: StaticTicket[S]): P = pulse(ticket.ticket)
+  override type Value <: P
 }
 
 
@@ -44,7 +47,9 @@ trait Pulsing[+P, S <: Struct] extends Reactive[S] {
 abstract class Base[P, S <: Struct](struct: S#State[Pulse[P], S]) extends Pulsing[Pulse[P], S] {
   override type Value = Pulse[P]
   final override protected[rescala] def state: S#State[Value, S] = struct
-
-  final protected[rescala] override def stable(implicit ticket: S#Ticket[S]): Pulse[P] = state.base
-  final protected[rescala] override def pulse(implicit ticket: S#Ticket[S]): Pulse[P] = state.get
 }
+
+
+
+
+

@@ -1,8 +1,7 @@
 package rescala.meta
 
-import rescala.engine.{Engine, TurnSource}
+import rescala.engine.{Engine, Turn, TurnSource}
 import rescala.graph.{Pulsing, Struct}
-import rescala.propagation.Turn
 import rescala.reactives.{Evt, _}
 
 trait Reifier[S <: Struct] {
@@ -32,7 +31,7 @@ class EngineReifier[S <: Struct]()(implicit val engine: Engine[S, Turn[S]]) exte
       unreify(n)
     reifiedCache.get(node) match {
       case Some(r) =>
-        val savedPulse = ticket { t:Turn[S] => r.pulse(t.makeTicket()) }
+        val savedPulse = ticket { t:Turn[S] => t.after(r) }
         node.graph.savePulse(node, savedPulse)
         r match {
           case e:Event[_, _] => e.disconnect()

@@ -1,8 +1,7 @@
 package rescala.levelbased
 
-import rescala.engine.Engine
+import rescala.engine.{Engine, Turn}
 import rescala.graph.{Reactive, Struct}
-import rescala.propagation.Turn
 import rescala.twoversion.EngineImpl
 
 import scala.language.existentials
@@ -26,7 +25,7 @@ trait LevelBasedPropagationEngines {
 
 
   implicit val synchron: SimpleEngine = new EngineImpl[SimpleStruct, SimpleNoLock]("Synchron", new SimpleNoLock()) {
-    override def plan[R](i: Reactive*)(f: SimpleNoLock => R): R = synchronized(super.plan(i: _*)(f))
+    override def transaction[R](i: Reactive*)(f: SimpleNoLock => R): R = synchronized(super.transaction(i: _*)(f))
   }
 
   implicit val unmanaged: SimpleEngine = new EngineImpl[SimpleStruct, SimpleNoLock]("Unmanaged", new SimpleNoLock())

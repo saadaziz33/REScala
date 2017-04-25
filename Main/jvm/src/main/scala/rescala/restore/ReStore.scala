@@ -2,7 +2,6 @@ package rescala.restore
 
 import rescala.graph.{Reactive, Struct}
 import rescala.levelbased.{LevelBasedPropagation, LevelStruct, LevelStructTypeImpl}
-import rescala.propagation.Turn
 import rescala.twoversion.{PlanImpl, TwoVersionPropagation}
 
 case class Storing(current: Any, level: Int, incoming: Set[Reactive[Struct]])
@@ -57,7 +56,7 @@ class ReStoringEngine(domain: String = "", restoreFrom: Seq[(String, Storing)] =
 
   override protected def makeTurn(priorTurn: Option[ReStoringTurn]): ReStoringTurn = new ReStoringTurn(this)
   lazy override val toString: String = s"Engine(Restoring: $domain)"
-  override def plan[R](i: Reactive*)(f: ReStoringTurn => R): R = synchronized(super.plan(i: _*)(f))
+  override def transaction[R](i: Reactive*)(f: ReStoringTurn => R): R = synchronized(super.transaction(i: _*)(f))
 
 }
 

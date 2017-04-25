@@ -2,14 +2,13 @@ package tests.rescala.concurrency.philosophers
 
 import java.util.concurrent.atomic.AtomicInteger
 
-import rescala.engine.Engine
-import .named
+import rescala.engine.{Engine, Turn}
+import rescala.util.Globals.named
 import rescala.graph.Struct
 import rescala.parrp.Backoff
-import rescala.propagation.Turn
 import rescala.reactives.{Signal, Var}
 import rescala.reactives.Signals.lift
-import rescala.twoversion.Committable
+import rescala.twoversion.{Committable, CommonPropagationImpl, TwoVersionPropagation}
 
 class PhilosopherTable[S <: Struct](philosopherCount: Int, work: Long)(implicit val engine: Engine[S, Turn[S]]) {
 
@@ -65,13 +64,18 @@ class PhilosopherTable[S <: Struct](philosopherCount: Int, work: Long)(implicit 
 
 
   def tryEat(seating: Seating[S]): Boolean =
-    engine.plan(seating.philosopher) { turn =>
+    engine.transaction(seating.philosopher) { turn =>
       val forksWereFree = seating.vision.now(turn) == Ready
       if (forksWereFree) seating.philosopher.admit(Hungry)(turn)
-      turn.schedule(new Committable {
-        override def commit(implicit t: Turn[_]): Unit = if (forksWereFree) assert(seating.vision.now(turn) == Eating, s"philosopher should be done after turn but is ${seating.inspect(turn)}")
-        override def release(implicit t: Turn[_]): Unit = assert(assertion = false, "turn should not rollback")
-      })
+      turn match {
+        case cmn: CommonPropagationImpl[S] =>
+          cmn.schedule(new Committable[S] {
+            override def commit(implicit t: TwoVersionPropagation[S]): Unit = if (forksWereFree) assert(seating.vision.now(turn) == Eating, s"philosopher should be done after turn but is ${seating.inspect(turn)}")
+            override def release(implicit t: TwoVersionPropagation[S]): Unit = () /*assert(assertion = false, "turn should not rollback")*/ // assertion is unnecessary, exception propagation will take care
+          })
+        case _ =>
+      }
+
       forksWereFree
     }
 

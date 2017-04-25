@@ -5,8 +5,7 @@ import java.util.concurrent.TimeUnit
 import benchmarks.{EngineParam, Workload}
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.BenchmarkParams
-import rescala.engine.Engine
-import rescala.propagation.Turn
+import rescala.engine.{Engine, Turn}
 
 @BenchmarkMode(Array(Mode.Throughput))
 @OutputTimeUnit(TimeUnit.MILLISECONDS)
@@ -27,7 +26,7 @@ class TurnCreation[S <: rescala.graph.Struct] {
 
   @Benchmark
   def run(): Turn[S] = {
-    engine.plan()(identity)
+    engine.transaction()(identity)
   }
 
 

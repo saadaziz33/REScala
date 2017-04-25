@@ -32,8 +32,8 @@ lazy val rescala = crossProject(JSPlatform, JVMPlatform).in(file("Main"))
   .settings(
     name := "rescala",
     resolvers += Resolver.bintrayRepo("pweisenburger", "maven"),
-    libraryDependencies += "de.tuda.stg" %% "retypecheck" % "0.1.0",
-    libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value,
+    libraryDependencies += "de.tuda.stg" %% "retypecheck" % "0.2.0",
+    libraryDependencies += scalaOrganization.value % "scala-reflect" % scalaVersion.value % "provided",
 
     sourceGenerators in Compile += Def.task {
       val file = (sourceManaged in Compile).value / "rescala" / "reactives" / "GeneratedSignalLift.scala"
@@ -42,7 +42,7 @@ lazy val rescala = crossProject(JSPlatform, JVMPlatform).in(file("Main"))
         val types = 1 to i map ("A" + _)
         val signals = params zip types map {case (p, t) => s"$p: Signal[$t, S]"}
         def sep(l: Seq[String]) = l.mkString(", ")
-        val getValues = params map (_ + ".pulse(t).get")
+        val getValues = params map (v => s"t.turn.after($v).get")
         s"""  def lift[${sep(types)}, B, S <: Struct](${sep(signals)})(fun: (${sep(types)}) => B)(implicit maybe: TurnSource[S]): Signal[B, S] = {
            |    static(${sep(params)})(t => fun(${sep(getValues)}))
            |  }
@@ -297,4 +297,5 @@ scalacOptions in ThisBuild ++= (
   "-Ywarn-numeric-widen" ::
   //"-Ywarn-value-discard" ::
   //"-Ymacro-debug-lite" ::
+  "-language:higherKinds" ::
   Nil)

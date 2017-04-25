@@ -2,7 +2,6 @@ package rescala.engine
 
 import rescala.RescalaDefaultImports
 import rescala.graph.Struct
-import rescala.propagation.Turn
 
 import scala.annotation.implicitNotFound
 import scala.language.experimental.macros
@@ -26,7 +25,7 @@ trait Engine[S <: Struct, +TTurn <: Turn[S]] extends RescalaDefaultImports[S] {
     * @tparam R Result type of the admission function
     * @return Result of the admission function
     */
-  def plan[R](initialWrites: Reactive*)(admissionPhase: TTurn => R): R
+  def transaction[R](initialWrites: Reactive*)(admissionPhase: TTurn => R): R
 
   /**
     * If there is already a current turn running, the given function is applied onto it. Otherwise, a new full turn

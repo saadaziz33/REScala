@@ -1,8 +1,7 @@
 package rescala.reactives
 
-import rescala.engine.{Engine, TurnSource}
+import rescala.engine.{Engine, Turn, TurnSource}
 import rescala.graph._
-import rescala.propagation.Turn
 
 import scala.language.higherKinds
 
@@ -15,10 +14,10 @@ class Source[T, S <: Struct](_bud: S#State[Pulse[T], S]) extends Base[T, S](_bud
     result = value
   }
 
-  final override protected[rescala] def reevaluate(ticket: S#Ticket[S]): ReevaluationResult[Value, S] = {
-    val res: ReevaluationResult[Pulse[T], S] = if (result == null || result == stable(ticket))
+  final override protected[rescala] def reevaluate(turn: Turn[S]): ReevaluationResult[Value, S] = {
+    val res: ReevaluationResult[Pulse[T], S] = if (result == null || result == turn.before(this))
       ReevaluationResult.Static(Pulse.NoChange)
-    else ReevaluationResult.Static[T, S](result)
+    else ReevaluationResult.Static[T](result)
     result = null
     res
   }
@@ -36,7 +35,7 @@ final class Evt[T, S <: Struct]()(_bud: S#State[Pulse[T], S]) extends Source[T, 
   /** Trigger the event */
   def apply(value: T)(implicit fac: Engine[S, Turn[S]]): Unit = fire(value)
   def fire()(implicit fac: Engine[S, Turn[S]], ev: Unit =:= T): Unit = fire(ev(Unit))(fac)
-  def fire(value: T)(implicit fac: Engine[S, Turn[S]]): Unit = fac.plan(this) {admit(value)(_)}
+  def fire(value: T)(implicit fac: Engine[S, Turn[S]]): Unit = fac.transaction(this) {admit(value)(_)}
   override def disconnect()(implicit engine: Engine[S, Turn[S]]): Unit = ()
 }
 
@@ -56,14 +55,12 @@ object Evt {
   */
 final class Var[A, S <: Struct](_bud: S#State[Pulse[A], S]) extends Source[A, S](_bud) with Signal[A, S] {
   def update(value: A)(implicit fac: Engine[S, Turn[S]]): Unit = set(value)
-  def set(value: A)(implicit fac: Engine[S, Turn[S]]): Unit = fac.plan(this) {admit(value)(_)}
+  def set(value: A)(implicit fac: Engine[S, Turn[S]]): Unit = fac.transaction(this) {admit(value)(_)}
 
-  def transform(f: A => A)(implicit fac: Engine[S, Turn[S]]): Unit = fac.plan(this) { t =>
-    val ticket = t.makeTicket()
+  def transform(f: A => A)(implicit fac: Engine[S, Turn[S]]): Unit = fac.transaction(this) { t =>
+    admit(f(t.before(this).get))(t) }
 
-    admit(f(pulse(ticket).get))(t) }
-
-  def setEmpty()(implicit fac: Engine[S, Turn[S]]): Unit = fac.plan(this)(t => admitPulse(Pulse.empty)(t))
+  def setEmpty()(implicit fac: Engine[S, Turn[S]]): Unit = fac.transaction(this)(t => admitPulse(Pulse.empty)(t))
 
   override def disconnect()(implicit engine: Engine[S, Turn[S]]): Unit = ()
 }

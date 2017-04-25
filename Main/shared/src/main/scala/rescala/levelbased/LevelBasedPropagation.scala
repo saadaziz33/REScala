@@ -1,7 +1,7 @@
 package rescala.levelbased
 
 import rescala.graph.ReevaluationResult.{Dynamic, Static}
-import rescala.graph.{DepDiff, Reactive}
+import rescala.graph.{Reactive, ReevaluationResult}
 import rescala.twoversion.CommonPropagationImpl
 
 /**
@@ -14,28 +14,25 @@ trait LevelBasedPropagation[S <: LevelStruct] extends CommonPropagationImpl[S] w
 
   val levelQueue = new LevelQueue[S](this)(this)
 
-  def evaluate(head: Reactive[S], ticket: S#Ticket[S]): Unit = {
+  override def evaluate(head: Reactive[S]): Unit = {
+    def reevOut(level: Int, res: ReevaluationResult[head.Value, S]) = {
+      if (res.isChange) {
+        writeState(head)(res.value)
+        head.state.outgoing(this).foreach(levelQueue.enqueue(level, true))
+      }
+    }
 
-    def requeue(changed: Boolean, level: Int, redo: Boolean): Unit =
-      if (redo) levelQueue.enqueue(level, changed)(head)
-      else if (changed) head.state.outgoing(this).foreach(levelQueue.enqueue(level, changed))
-
-    head.reevaluate(ticket) match {
-      case Static(value) =>
-        if (value.isDefined) {
-          head.state.set(value.get, this)
-          requeue(changed = true, level = -42, redo = false)
-        }
-      case Dynamic(value, deps) =>
-        val diff = DepDiff(deps, head.state.incoming(this))
-        applyDiff(head, diff)
-        val newLevel = maximumLevel(diff.novel) + 1
+    head.reevaluate(this) match {
+      case res: Static[head.Value] => reevOut(-42, res)
+      case res: Dynamic[head.Value, S] =>
+        val newLevel = maximumLevel(res.dependencies) + 1
         val redo = head.state.level(this) < newLevel
-        val hasChanged = value.isDefined
-        if (!redo && hasChanged) {
-          head.state.set(value.get, this)
+        if(redo) {
+          levelQueue.enqueue(newLevel, true)(head)
+        } else {
+          applyDiff(head, res.depDiff(head.state.incoming(this)))
+          reevOut(newLevel, res)
         }
-        requeue(hasChanged, newLevel, redo)
     }
     _evaluated ::= head
 
@@ -45,21 +42,20 @@ trait LevelBasedPropagation[S <: LevelStruct] extends CommonPropagationImpl[S] w
 
 
   override def create[T <: Reactive[S]](dependencies: Set[Reactive[S]], dynamic: Boolean)(f: => T): T = {
-    implicit val ticket: S#Ticket[S] = makeTicket()
 
     val reactive = f
     val level = ensureLevel(reactive, dependencies)
-    if (dynamic) evaluate(reactive, ticket)
+    if (dynamic) evaluate(reactive)
     else {
       dependencies.foreach(discover(reactive))
       if (level <= levelQueue.currentLevel() && dependencies.exists(_evaluated.contains)) {
-        evaluate(reactive, ticket)
+        evaluate(reactive)
       }
     }
     reactive
   }
 
-  def ensureLevel(dependant: Reactive[S], dependencies: Set[Reactive[S]])(implicit ticket: S#Ticket[S]): Int =
+  def ensureLevel(dependant: Reactive[S], dependencies: Set[Reactive[S]]): Int =
     if (dependencies.isEmpty) 0
     else {
       val newLevel = dependencies.map(_.state.level(this)).max + 1
@@ -70,8 +66,6 @@ trait LevelBasedPropagation[S <: LevelStruct] extends CommonPropagationImpl[S] w
   override def dynamicDependencyInteraction(dependency: Reactive[S]): Unit = ()
 
   override def preparationPhase(initialWrites: Traversable[Reactive[S]]): Unit = {
-    implicit val ticket: S#Ticket[S] = makeTicket()
-
     initialWrites.foreach { reactive =>
       levelQueue.enqueue(reactive.state.level(this))(reactive)
     }

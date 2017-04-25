@@ -1,11 +1,11 @@
 package rescala.stm
 
+import rescala.engine.Turn
 import rescala.graph.{Reactive, Struct}
 import rescala.levelbased.LevelStructType
-import rescala.propagation.Turn
-import rescala.twoversion.{ReadWriteValue, TwoVersionPropagation}
+import rescala.twoversion.{ReadWriteValue, Token, TwoVersionPropagation}
 
-import scala.concurrent.stm.{InTxn, Ref, TxnLocal}
+import scala.concurrent.stm.{InTxn, Ref, TxnLocal, atomic}
 
 class STMStructType[P, S <: Struct](initialValue: P, transient: Boolean, initialIncoming: Set[Reactive[S]]) extends LevelStructType[S] with ReadWriteValue[P, S] {
 
@@ -13,6 +13,12 @@ class STMStructType[P, S <: Struct](initialValue: P, transient: Boolean, initial
     case stmTurn: STMTurn => stmTurn.inTxn
     case _ => throw new IllegalStateException(s"$turn has invalid type for $this")
   }
+
+  def inTxn(token: Token): InTxn = token.payload match {
+    case stmTurn: InTxn => stmTurn
+    case _ => throw new IllegalStateException(s"$token has invalid type for $this")
+  }
+
 
   val _level: Ref[Int] = Ref(0)
   val _outgoing: Ref[Set[Reactive[S]]] = Ref(Set.empty)
@@ -34,10 +40,14 @@ class STMStructType[P, S <: Struct](initialValue: P, transient: Boolean, initial
     if (!transient && updateValue.isDefined) current.set(updateValue.get)
   })
 
-  override def set(value: P, turn: TwoVersionPropagation[S]): Unit = {
-    update.set(Some(value))(inTxn(turn))
+  override def write(value: P, token: Token): Boolean = {
+    update.set(Some(value))(inTxn(token))
+    false
   }
-  override def base(implicit turn: S#Ticket[S]): P = current.get(inTxn(turn.turn()))
-  override def get(implicit turn: S#Ticket[S]): P = update.get(inTxn(turn.turn())).getOrElse(current.get(inTxn(turn.turn())))
+  override def base(token: Token): P = current.get(inTxn(token))
+  override def get(token: Token): P = update.get(inTxn(token)).getOrElse(current.get(inTxn(token)))
 
+
+  override def commit(implicit turn: TwoVersionPropagation[S]): Unit = {}
+  override def release(implicit turn: TwoVersionPropagation[S]): Unit = {}
 }

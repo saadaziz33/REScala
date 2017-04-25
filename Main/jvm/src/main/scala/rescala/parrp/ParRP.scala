@@ -1,7 +1,7 @@
 package rescala.parrp
 
 import rescala.graph.{Reactive, Struct}
-import rescala.levelbased.{LevelBasedPropagation, LevelStruct}
+import rescala.levelbased.{LevelBasedPropagation, LevelStruct, LevelStructTypeImpl}
 import rescala.locking._
 
 trait ParRPInterTurn {
@@ -15,6 +15,10 @@ trait ParRPInterTurn {
 
 }
 
+class ParRPStructType[P, S <: Struct](current: P, transient: Boolean, val lock: TurnLock[ParRPInterTurn], initialIncoming: Set[Reactive[S]])
+  extends LevelStructTypeImpl[P, S](current, transient, initialIncoming)
+
+
 class ParRP(backoff: Backoff, priorTurn: Option[ParRP]) extends LevelBasedPropagation[ParRP] with ParRPInterTurn with LevelStruct {
   override type State[P, S <: Struct] = ParRPStructType[P, S]
 
@@ -24,6 +28,16 @@ class ParRP(backoff: Backoff, priorTurn: Option[ParRP]) extends LevelBasedPropag
   override private[rescala] def makeStructState[P](initialValue: P, transient: Boolean, initialIncoming: Set[Reactive[TState]], hasState: Boolean): TState#State[P, ParRP] = {
     val lock = new TurnLock[ParRPInterTurn]
     new ParRPStructType[P, ParRP](initialValue, transient, lock, initialIncoming)
+  }
+
+
+  override def writeState[P](pulsing: Reactive[TState])(value: pulsing.Value): Unit = {
+    assert({
+      val wlo: Option[Key[ParRPInterTurn]] = Option(pulsing.state.lock.getOwner)
+      wlo.fold(true)(_ eq key)},
+      s"buffer ${pulsing.state}, controlled by ${pulsing.state.lock} with owner ${pulsing.state.lock.getOwner}" +
+        s" was written by $this who locks with ${key}, by now the owner is ${pulsing.state.lock.getOwner}")
+    super.writeState(pulsing)(value)
   }
 
 
@@ -57,7 +71,6 @@ class ParRP(backoff: Backoff, priorTurn: Option[ParRP]) extends LevelBasedPropag
   /** lock all reactives reachable from the initial sources
     * retry when acquire returns false */
   override def preparationPhase(initialWrites: Traversable[Reactive[TState]]): Unit = {
-    implicit val ticket = makeTicket()
     val toVisit = new java.util.ArrayDeque[Reactive[TState]](10)
     initialWrites.foreach(toVisit.offer)
     val priorKey = priorTurn.map(_.key).orNull
@@ -89,14 +102,10 @@ class ParRP(backoff: Backoff, priorTurn: Option[ParRP]) extends LevelBasedPropag
     * so that it gets updated when that turn continues
     * the responsibility for correctly passing the locks is moved to the commit phase */
   override def discover(sink: Reactive[TState])(source: Reactive[TState]): Unit = {
-
     val owner = acquireShared(source)
     if (owner ne key) {
-      if (!source.state.lock.isWriteLock) {
-        owner.turn.discover(sink)(source)
-      }
-      else if (!source.state.outgoing(this).contains(sink)) {
-        owner.turn.discover(sink)(source)
+      owner.turn.discover(sink)(source)
+      if (source.state.lock.isWriteLock) {
         owner.turn.admit(sink)
         key.lockKeychain { _.addFallthrough(owner) }
       }
@@ -108,14 +117,15 @@ class ParRP(backoff: Backoff, priorTurn: Option[ParRP]) extends LevelBasedPropag
 
   /** this is for cases where we register and then unregister the same dependency in a single turn */
   override def drop(sink: Reactive[TState])(source: Reactive[TState]): Unit = {
-
-
     val owner = acquireShared(source)
     if (owner ne key) {
       owner.turn.drop(sink)(source)
-      if (!source.state.lock.isWriteLock) {
+      if (source.state.lock.isWriteLock) {
         key.lockKeychain(_.removeFallthrough(owner))
-        if (!sink.state.incoming(this).exists(_.state.lock.isOwner(owner))) owner.turn.forget(sink)
+        if (!sink.state.incoming(this).exists{ inc =>
+          val lock = inc.state.lock
+          lock.isOwner(owner) && lock.isWriteLock
+        }) owner.turn.forget(sink)
       }
     }
     else super.drop(sink)(source)
