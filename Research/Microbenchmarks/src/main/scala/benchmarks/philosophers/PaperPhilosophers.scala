@@ -126,7 +126,7 @@ object PaperPhilosophers {
     val duration = if(args.length >= 3) Integer.parseInt(args(2)) else 0
 
     val engine = new rescala.fullmv.FullMVEngine(Duration.Zero, s"PaperPhilosophers($tableSize,$threadCount)")
-    val table = new PaperPhilosophers(tableSize, engine, true)
+    val table = new PaperPhilosophers(tableSize, engine, dynamicEdgeChanges = false)
 
     val continue: () => Boolean = if(duration == 0) {
       println("Running in interactive mode: press <Enter> to terminate.")

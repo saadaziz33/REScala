@@ -16,13 +16,10 @@ trait NotificationAction extends FullMVAction {
   def processNotificationResult(notificationResultAction: NotificationResultAction[FullMVTurn, Reactive[FullMVStruct]]): Traversable[FullMVAction] = {
     notificationResultAction match {
       case GlitchFreeReadyButQueued =>
-        turn.activeBranchDifferential(TurnPhase.Executing, -1)
         Traversable.empty
       case ResolvedNonFirstFrameToUnchanged =>
-        turn.activeBranchDifferential(TurnPhase.Executing, -1)
         Traversable.empty
       case NotGlitchFreeReady =>
-        turn.activeBranchDifferential(TurnPhase.Executing, -1)
         Traversable.empty
       case GlitchFreeReady =>
         Traversable(Reevaluation(turn, node))

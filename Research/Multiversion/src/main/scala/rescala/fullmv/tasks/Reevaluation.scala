@@ -32,17 +32,10 @@ object Reevaluation {
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] Reevaluation($turn,$node) => ${if(changed) "changed" else "unchanged"} $outAndSucc")
     outAndSucc match {
       case NoSuccessor(out) =>
-        val branchDiff = out.size - 1
-        if(branchDiff != 0) turn.activeBranchDifferential(TurnPhase.Executing, branchDiff)
         out.map(Notification(turn, _, changed))
       case FollowFraming(out, succTxn) =>
-        val branchDiff = out.size - 1
-        if(branchDiff != 0) turn.activeBranchDifferential(TurnPhase.Executing, branchDiff)
         out.map(NotificationWithFollowFrame(turn, _, changed, succTxn))
       case NextReevaluation(out, succTxn) =>
-        succTxn.activeBranchDifferential(TurnPhase.Executing, 1)
-        val branchDiff = out.size - 1
-        if(branchDiff != 0) turn.activeBranchDifferential(TurnPhase.Executing, branchDiff)
         (out.map(NotificationWithFollowFrame(turn, _, changed, succTxn)): Set[FullMVAction]) + Reevaluation(succTxn, node)
     }
   }

@@ -1,26 +1,134 @@
 package rescala.fullmv
 
-import java.util.concurrent.ForkJoinTask
+import java.util.concurrent.locks.{LockSupport, ReentrantLock}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
+import java.util.function.BiConsumer
 
 import rescala.core._
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.NoSuccessor
 import rescala.fullmv.mirrors.FullMVTurnProxy
-import rescala.fullmv.tasks.{Notification, Reevaluation}
+import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation}
 
-trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
-  val engine: FullMVEngine
+import scala.annotation.tailrec
+import scala.collection.mutable.ArrayBuffer
 
-  //========================================================Internal Management============================================================
+class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
+  val taskQueue = new ConcurrentLinkedQueue[FullMVAction]()
+  val waiters = new ConcurrentHashMap[Thread, TurnPhase.Type]()
 
-  // ===== Turn State Manangement External API
-  // should be mirrored/buffered locally
-  def phase: TurnPhase.Type
-  def awaitPhase(atLeast: TurnPhase.Type): Unit
-  def activeBranchDifferential(forState: TurnPhase.Type, differential: Int): Unit
+  val phaseLock = new ReentrantLock()
+  @volatile var phase: TurnPhase.Type = TurnPhase.Initialized
 
-  // ===== Ordering Search&Establishment External API
-  // should be mirrored/buffered locally
-  def isTransitivePredecessor(txn: FullMVTurn): Boolean
+  val successorsIncludingSelf: ArrayBuffer[FullMVTurn] = ArrayBuffer(this) // this is implicitly a set
+  val selfNode = new MutableTransactionSpanningTreeNode[FullMVTurn](this)
+  @volatile var predecessorSpanningTreeNodes: Map[FullMVTurn, MutableTransactionSpanningTreeNode[FullMVTurn]] = Map(this -> selfNode)
+
+  //========================================================Local State Control============================================================
+
+  def awaitAndSwitchPhase(newPhase: TurnPhase.Type): Unit = {
+    assert(newPhase > this.phase, s"$this cannot progress backwards to phase $newPhase.")
+    @tailrec def awaitAndAtomicCasPhase(): Unit = {
+      awaitBranchCountZero()
+      val compare = predecessorSpanningTreeNodes
+      compare.find{ case (turn, _) => turn != this && turn.phase < newPhase } match {
+        case Some((turn, _)) =>
+          turn.waiters.put(this.userlandThread, newPhase)
+          while(taskQueue.isEmpty && turn.phase < newPhase) {
+            if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this parking for $turn.")
+            LockSupport.park(turn)
+            if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this unparked.")
+          }
+          turn.waiters.remove(this.userlandThread)
+          awaitAndAtomicCasPhase()
+        case None =>
+          phaseLock.lock()
+          val success = try {
+            if (taskQueue.isEmpty && (predecessorSpanningTreeNodes eq compare)) {
+              this.phase = newPhase
+              waiters.forEach(new BiConsumer[Thread, TurnPhase.Type] {
+                override def accept(t: Thread, u: TurnPhase.Type) = if (u <= newPhase) {
+                  if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this phase switch unparking $t.")
+                  LockSupport.unpark(t)
+                }
+              })
+              if (newPhase == TurnPhase.Completed) {
+                predecessorSpanningTreeNodes = Map.empty
+                selfNode.children = Set.empty
+              }
+              if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this switched phase.")
+              true
+            } else {
+              false
+            }
+          } finally {
+            phaseLock.unlock()
+          }
+          if(!success) awaitAndAtomicCasPhase()
+      }
+    }
+    awaitAndAtomicCasPhase()
+  }
+
+
+  @tailrec private def awaitBranchCountZero(): Unit = {
+    val head = taskQueue.poll()
+    if(head != null) {
+      assert(head.turn == this, s"$head in taskQueue of $this")
+      head.compute()
+      awaitBranchCountZero()
+    }
+  }
+
+  //========================================================Ordering Search and Establishment Interface============================================================
+
+  def isTransitivePredecessor(txn: FullMVTurn): Boolean = {
+    predecessorSpanningTreeNodes.contains(txn)
+  }
+
+
+  override def acquirePhaseLockAndGetEstablishmentBundle(): (TurnPhase.Type, TransactionSpanningTreeNode[FullMVTurn]) = {
+    // TODO think about how and where to try{}finally{unlock()} this..
+    phaseLock.lock()
+    (phase, selfNode)
+  }
+
+  def addPredecessorAndReleasePhaseLock(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+    @inline def predecessor = predecessorSpanningTree.txn
+    assert(!isTransitivePredecessor(predecessor), s"attempted to establish already existing predecessor relation $predecessor -> $this")
+    if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new predecessor $predecessor.")
+    for(succ <- successorsIncludingSelf) succ.maybeNewReachableSubtree(this, predecessorSpanningTree)
+    phaseLock.unlock()
+  }
+
+  override def maybeNewReachableSubtree(attachBelow: FullMVTurn, spanningSubTreeRoot: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+    if (!isTransitivePredecessor(spanningSubTreeRoot.txn)) {
+      copySubTreeRootAndAssessChildren(attachBelow, spanningSubTreeRoot)
+    }
+  }
+
+  private def copySubTreeRootAndAssessChildren(attachBelow: FullMVTurn, spanningSubTreeRoot: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+    val newTransitivePredecessor = spanningSubTreeRoot.txn
+    newTransitivePredecessor.newSuccessor(this)
+    val copiedSpanningTreeNode = new MutableTransactionSpanningTreeNode(newTransitivePredecessor)
+    predecessorSpanningTreeNodes += newTransitivePredecessor -> copiedSpanningTreeNode
+    predecessorSpanningTreeNodes(attachBelow).children += copiedSpanningTreeNode
+
+    for (child <- spanningSubTreeRoot.children) {
+      if(!isTransitivePredecessor(child.txn)) {
+        copySubTreeRootAndAssessChildren(newTransitivePredecessor, child)
+      }
+    }
+  }
+
+  override def newSuccessor(successor: FullMVTurn): Unit = {
+    successorsIncludingSelf += successor
+  }
+
+  override def asyncReleasePhaseLock(): Unit = phaseLock.unlock()
+
+  //========================================================ToString============================================================
+
+  override def toString: String = s"FullMVTurn($hashCode, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
 
   //========================================================Scheduler Interface============================================================
 
@@ -50,7 +158,6 @@ trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
     // This matches the required behavior where the code that creates this reactive is expecting the initial
     // reevaluation (if one is required) to have been completed, but cannot access values from subsequent turns
     // and hence does not need to wait for those.
-    activeBranchDifferential(TurnPhase.Executing, 1)
     val ignitionNotification = Notification(this, reactive, changed = ignitionRequiresReevaluation)
     val notificationResult = ignitionNotification.doCompute()
     if(notificationResult.nonEmpty) {
@@ -63,12 +170,7 @@ trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
         assert(notificationResult.head.isInstanceOf[Reevaluation])
         val followReev = notificationResult.head.asInstanceOf[Reevaluation]
         if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive reevaluated, delegating successor reevaluation for ${followReev.turn} to pool.")
-        if (ForkJoinTask.inForkJoinPool()) {
-          followReev.fork()
-        } else {
-          // this should be the case if reactive is created during admission or wrap-up phase
-          engine.threadPool.submit(followReev)
-        }
+        taskQueue.offer(followReev)
       } else {
         if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive reevaluated, no successor reevaluation.")
       }

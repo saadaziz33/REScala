@@ -1,7 +1,7 @@
 package tests.rescala.fullmv
 
 import org.scalatest.FunSuite
-import rescala.fullmv.{FullMVTurnImpl, TurnPhase}
+import rescala.fullmv.TurnPhase
 
 import rescala.fullmv.FullMVEngine.default._
 

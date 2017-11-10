@@ -10,30 +10,15 @@ trait FramingTask extends FullMVAction {
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this => $branchResult")
     branchResult match {
       case FramingBranchEnd =>
-        turn.activeBranchDifferential(TurnPhase.Framing, -1)
         Traversable.empty
       case Frame(out, maybeOtherTurn) =>
-        branchCountDiffOnBranchOut(out, maybeOtherTurn)
         out.map(Framing(maybeOtherTurn, _))
       case Deframe(out, maybeOtherTurn) =>
-        branchCountDiffOnBranchOut(out, maybeOtherTurn)
         out.map(Deframing(maybeOtherTurn, _))
       case FrameSupersede(out, maybeOtherTurn, supersede) =>
-        branchCountDiffOnBranchOut(out, maybeOtherTurn)
         out.map(SupersedeFraming(maybeOtherTurn, _, supersede))
       case DeframeReframe(out, maybeOtherTurn, reframe) =>
-        branchCountDiffOnBranchOut(out, maybeOtherTurn)
         out.map(DeframeReframing(maybeOtherTurn, _, reframe))
-    }
-  }
-
-  private def branchCountDiffOnBranchOut(out: Set[ReSource[FullMVStruct]], maybeOtherTurn: FullMVTurn): Unit = {
-    if (turn == maybeOtherTurn) {
-      val branchDiff = out.size - 1
-      if (branchDiff != 0) turn.activeBranchDifferential(TurnPhase.Framing, branchDiff)
-    } else {
-      if (out.nonEmpty) maybeOtherTurn.activeBranchDifferential(TurnPhase.Framing, out.size)
-      turn.activeBranchDifferential(TurnPhase.Framing, -1)
     }
   }
 

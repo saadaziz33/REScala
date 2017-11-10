@@ -1,6 +1,6 @@
 package rescala.fullmv
 
-import java.util.concurrent.{Executor, ForkJoinPool}
+import java.util.concurrent.Executor
 
 import rescala.core.{EngineImpl, ReSourciV}
 import rescala.fullmv.NotificationResultAction.GlitchFreeReady
@@ -12,14 +12,12 @@ import scala.concurrent.duration._
 import scala.util.Try
 
 class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[FullMVStruct, FullMVTurn] {
-  def newTurn(): FullMVTurnImpl = new FullMVTurnImpl(this, Thread.currentThread())
-  val dummy: FullMVTurnImpl = {
-    val dummy = new FullMVTurnImpl(this, null)
+  def newTurn(): FullMVTurn = new FullMVTurn(this, Thread.currentThread())
+  val dummy: FullMVTurn = {
+    val dummy = new FullMVTurn(this, null)
     dummy.awaitAndSwitchPhase(TurnPhase.Completed)
     dummy
   }
-
-  val threadPool = new ForkJoinPool()
 
   override private[rescala] def singleNow[A](reactive: ReSourciV[A, FullMVStruct]) = reactive.state.latestValue
 
@@ -29,8 +27,7 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
     if(setWrites.nonEmpty) {
       // framing phase
       turn.awaitAndSwitchPhase(TurnPhase.Framing)
-      turn.activeBranchDifferential(TurnPhase.Framing, setWrites.size)
-      for (i <- setWrites) threadPool.submit(Framing(turn, i))
+      for (i <- setWrites) turn.taskQueue.add(Framing(turn, i))
     }
 
     turn.awaitAndSwitchPhase(TurnPhase.Executing)
@@ -42,11 +39,10 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
       case scala.util.Failure(e) => e.printStackTrace()
       case _ =>
     }
-    assert(turn.activeBranches.get == 0, s"Admission phase left ${turn.activeBranches.get} active branches.")
+    assert(turn.taskQueue.isEmpty, s"Admission phase left ${turn.taskQueue.size()} active branches.")
 
     // propagation phase
     if(setWrites.nonEmpty) {
-      turn.activeBranchDifferential(TurnPhase.Executing, setWrites.size)
       val noChanges = if (admissionResult.isFailure) {
         setWrites
       } else {
@@ -62,13 +58,9 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
           val reevOutResult = change.r.state.reevOut(turn, if (res.valueChanged) Some(res.value) else None)
           reevOutResult match {
             case NoSuccessor(out) =>
-              val diff = out.size - 1
-              if (diff != 0) turn.activeBranchDifferential(TurnPhase.Executing, diff)
-              for (succ <- out) threadPool.submit(Notification(turn, succ, res.valueChanged))
+              for (succ <- out) turn.taskQueue.offer(Notification(turn, succ, res.valueChanged))
             case FollowFraming(out, succTxn: FullMVTurn) =>
-              val diff = out.size - 1
-              if (diff != 0) turn.activeBranchDifferential(TurnPhase.Executing, diff)
-              for (succ <- out) threadPool.submit(NotificationWithFollowFrame(turn, succ, res.valueChanged, succTxn))
+              for (succ <- out) turn.taskQueue.offer(NotificationWithFollowFrame(turn, succ, res.valueChanged, succTxn))
             case otherwise => throw new AssertionError("Source reevaluation should not be able to yield " + otherwise)
           }
         }
@@ -78,13 +70,9 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
         val notificationResult = i.state.notify(turn, changed = false)
         notificationResult match {
           case NoSuccessor(out) =>
-            val diff = out.size - 1
-            if (diff != 0) turn.activeBranchDifferential(TurnPhase.Executing, diff)
-            for (succ <- out) threadPool.submit(Notification(turn, succ, changed = false))
+            for (succ <- out) turn.taskQueue.offer(Notification(turn, succ, changed = false))
           case FollowFraming(out, succTxn: FullMVTurn) =>
-            val diff = out.size - 1
-            if (diff != 0) turn.activeBranchDifferential(TurnPhase.Executing, diff)
-            for (succ <- out) threadPool.submit(NotificationWithFollowFrame(turn, succ, changed = false, succTxn))
+            for (succ <- out) turn.taskQueue.offer(NotificationWithFollowFrame(turn, succ, changed = false, succTxn))
           case otherwise => throw new AssertionError("Source reevaluation should not be able to yield " + otherwise)
         }
       }
@@ -96,7 +84,7 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
     // wrap-up "phase" (executes in parallel with propagation)
     admissionResult.map{ i => admissionTicket.wrapUp(turn.makeWrapUpPhaseTicket()); i }
 
-    if(FullMVEngine.SEPARATE_WRAPUP_PHASE) assert(turn.activeBranches.get == 0, s"WrapUp phase left ${turn.activeBranches.get} active branches.")
+    if(FullMVEngine.SEPARATE_WRAPUP_PHASE) assert(turn.taskQueue.isEmpty, s"WrapUp phase left ${turn.taskQueue.size()} active branches.")
 
     // turn completion
     turn.awaitAndSwitchPhase(TurnPhase.Completed)
