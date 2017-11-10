@@ -3,8 +3,6 @@ package rescala.fullmv
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.{LockSupport, ReentrantLock}
 
-import rescala.fullmv.TurnPhase.Type
-
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 
@@ -20,11 +18,6 @@ class FullMVTurnImpl(override val engine: FullMVEngine, val userlandThread: Thre
   val selfNode = new MutableTransactionSpanningTreeNode[FullMVTurn](this)
   @volatile var predecessorSpanningTreeNodes: Map[FullMVTurn, MutableTransactionSpanningTreeNode[FullMVTurn]] = Map(this -> selfNode)
 
-  override def asyncRemoteBranchComplete(forPhase: Type): Unit = {
-    if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this branch on some remote completed")
-    activeBranchDifferential(forPhase, -1)
-  }
-
   def activeBranchDifferential(forState: TurnPhase.Type, differential: Int): Unit = {
     assert(phase == forState, s"$this received branch differential for wrong state ${TurnPhase.toString(forState)}")
     assert(differential != 0, s"$this received 0 branch diff")
@@ -33,18 +26,6 @@ class FullMVTurnImpl(override val engine: FullMVEngine, val userlandThread: Thre
     if(remaining == 0) {
       LockSupport.unpark(userlandThread)
     }
-  }
-
-  override def newBranchFromRemote(forPhase: Type): Unit = {
-    assert(phase == forPhase, s"$this received branch differential for wrong state ${TurnPhase.toString(forPhase)}")
-    if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new branch on remote is actually loop-back to local")
-    // technically, move one remote branch to a local branch, but as we don't count these separately, currently doing nothing.
-  }
-
-  override def addRemoteBranch(forPhase: TurnPhase.Type): Unit = {
-    assert(phase == forPhase, s"$this received branch differential for wrong state ${TurnPhase.toString(forPhase)}")
-    if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new branch on some remote")
-    activeBranches.getAndIncrement()
   }
 
   //========================================================Local State Control============================================================

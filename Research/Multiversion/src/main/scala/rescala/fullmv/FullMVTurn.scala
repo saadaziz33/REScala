@@ -17,7 +17,6 @@ trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
   def phase: TurnPhase.Type
   def awaitPhase(atLeast: TurnPhase.Type): Unit
   def activeBranchDifferential(forState: TurnPhase.Type, differential: Int): Unit
-  def newBranchFromRemote(forState: TurnPhase.Type): Unit
 
   // ===== Ordering Search&Establishment External API
   // should be mirrored/buffered locally
