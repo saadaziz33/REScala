@@ -176,10 +176,5 @@ object PaperPhilosophers {
         println("Total score: " + table.total + " (differs from individual scores' sum of " + individualsSum + ")")
       }
     }
-
-    val remainingTurns = engine.instances.size()
-    if(remainingTurns != 0) println(remainingTurns + " turn instances were not garbage collected")
-    val remainingLocks = engine.lockHost.instances.size()
-    if(remainingLocks != 0) println(remainingLocks + " lock instances were not garbage collected")
   }
 }

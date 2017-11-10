@@ -5,21 +5,16 @@ import java.util.concurrent.{Executor, ForkJoinPool}
 import rescala.core.{EngineImpl, ReSourciV}
 import rescala.fullmv.NotificationResultAction.GlitchFreeReady
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{FollowFraming, NoSuccessor}
-import rescala.fullmv.mirrors.{FullMVTurnHost, Host, HostImpl, SubsumableLockHostImpl}
 import rescala.fullmv.tasks.{Framing, Notification, NotificationWithFollowFrame}
 
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 import scala.concurrent.duration._
 import scala.util.Try
 
-class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[FullMVStruct, FullMVTurn] with FullMVTurnHost with HostImpl[FullMVTurn] {
-  override object lockHost extends SubsumableLockHostImpl {
-    override def toString: String = "Locks " + name
-  }
-  def newTurn(): FullMVTurnImpl = createLocal(new FullMVTurnImpl(this, _, Thread.currentThread(), lockHost.newLock()))
-  override val dummy: FullMVTurnImpl = {
-    val dummy = new FullMVTurnImpl(this, Host.dummyGuid, null, lockHost.newLock())
-    instances.put(Host.dummyGuid, dummy)
+class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[FullMVStruct, FullMVTurn] {
+  def newTurn(): FullMVTurnImpl = new FullMVTurnImpl(this, Thread.currentThread())
+  val dummy: FullMVTurnImpl = {
+    val dummy = new FullMVTurnImpl(this, null)
     dummy.awaitAndSwitchPhase(TurnPhase.Completed)
     dummy
   }

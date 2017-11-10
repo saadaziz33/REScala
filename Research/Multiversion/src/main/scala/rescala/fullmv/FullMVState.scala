@@ -1,8 +1,6 @@
 package rescala.fullmv
 
 trait FullMVState[V, T <: FullMVTurn, Reactive, OutDep] {
-  val host: FullMVEngine
-
   var incomings: Set[Reactive] = Set.empty
 
   def latestValue: V

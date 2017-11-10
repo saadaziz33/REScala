@@ -10,7 +10,7 @@ import scala.util.{Failure, Success, Try}
 case class Reevaluation(turn: FullMVTurn, node: Reactive[FullMVStruct]) extends FullMVAction {
   override def doCompute(): Traversable[FullMVAction] = {
     assert(turn.phase == TurnPhase.Executing, s"$this cannot reevaluate (requires executing phase")
-    val result = turn.host.withTurn(turn){ Try { node.reevaluate(turn, node.state.reevIn(turn), node.state.incomings) } }
+    val result = turn.engine.withTurn(turn){ Try { node.reevaluate(turn, node.state.reevIn(turn), node.state.incomings) } }
     result match {
       case Failure(exception) =>
         System.err.println(s"[FullMV Error] Reevaluation of $node failed with ${exception.getClass.getName}: ${exception.getMessage}; Completing reevaluation as NoChange.")

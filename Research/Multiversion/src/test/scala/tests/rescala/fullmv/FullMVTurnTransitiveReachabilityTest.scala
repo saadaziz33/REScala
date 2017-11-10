@@ -3,10 +3,7 @@ package tests.rescala.fullmv
 import org.scalatest.FunSuite
 import rescala.fullmv.{FullMVTurnImpl, TurnPhase}
 
-import scala.concurrent.Await
-import scala.concurrent.duration.Duration
 import rescala.fullmv.FullMVEngine.default._
-import rescala.fullmv.sgt.synchronization.Successful
 
 class FullMVTurnTransitiveReachabilityTest extends FunSuite {
   case class Disagreement[T](from: T, to: T, closure: Boolean, addEdgeSearchPath: Boolean)
@@ -15,22 +12,14 @@ class FullMVTurnTransitiveReachabilityTest extends FunSuite {
 
     // put all transactions under a common locked lock, so that all locking assertions hold
     trees.values.foreach(_.awaitAndSwitchPhase(TurnPhase.Executing))
-    trees.values.reduce{ (tA, tB) =>
-      val resA = Await.result(tA.lock(), Duration.Zero)
-      val resB = Await.result(tB.trySubsume(resA), Duration.Zero)
-      assert(resB === Successful)
-      resA.asyncUnlock()
-      tA
-    }
-    Await.result(trees.head._2.lock(), Duration.Zero)
 
     for((from, tos) <- edges; to <- tos) {
       val fromTree = trees(from)
       val toTree = trees(to)
       if(!fromTree.isTransitivePredecessor(toTree)) {
-        val (_, toTreeRoot) = Await.result(toTree.acquirePhaseLockAndGetEstablishmentBundle(), Duration.Zero)
-        Await.result(fromTree.acquirePhaseLockAndGetEstablishmentBundle(), Duration.Zero)
-        Await.result(fromTree.addPredecessorAndReleasePhaseLock(toTreeRoot), Duration.Zero)
+        val (_, toTreeRoot) = toTree.acquirePhaseLockAndGetEstablishmentBundle()
+        fromTree.acquirePhaseLockAndGetEstablishmentBundle()
+        fromTree.addPredecessorAndReleasePhaseLock(toTreeRoot)
         toTree.asyncReleasePhaseLock()
       }
     }

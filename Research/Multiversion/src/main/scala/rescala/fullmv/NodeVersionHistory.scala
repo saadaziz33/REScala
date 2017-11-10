@@ -4,7 +4,6 @@ import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.ForkJoinPool.ManagedBlocker
 
 import rescala.core.ValuePersistency
-import rescala.fullmv.sgt.synchronization.SubsumableLock
 
 import scala.annotation.elidable.ASSERTION
 import scala.annotation.{elidable, tailrec}
@@ -50,8 +49,6 @@ object NotificationResultAction {
   * @tparam OutDep the type of outgoing dependency nodes
   */
 class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePersistency: ValuePersistency[V]) extends FullMVState[V, T, InDep, OutDep] {
-  override val host: FullMVEngine = init.host
-
   class Version(val txn: T, var stable: Boolean, var out: Set[OutDep], var pending: Int, var changed: Int, var value: Option[V]) extends ManagedBlocker {
     // txn >= Executing, stable == true, node reevaluation completed changed
     def isWritten: Boolean = changed == 0 && value.isDefined
@@ -276,19 +273,9 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         val unblockedOrder = DecentralizedSGT.getOrder(pred, lookFor)
         assert(unblockedOrder != SecondFirstSameSCC)
         if(unblockedOrder == UnorderedSCCUnknown) {
-          val maybeLockedRoot = if (knownSameSCC) {
-            Some(SubsumableLock.acquireLock(lookFor, host.timeout))
-          } else {
-            SubsumableLock.acquireLock(pred, lookFor, host.timeout)
-          }
-          maybeLockedRoot match {
-            case Some(lockedRoot) =>
-              try {
-                val establishedOrder = DecentralizedSGT.ensureOrder(pred, lookFor, host.timeout)
-                assert(establishedOrder == FirstFirst)
-              } finally { lockedRoot.asyncUnlock() }
-            case None =>
-              assert(DecentralizedSGT.getOrder(pred, lookFor) == FirstFirstSCCUnkown, s"establishing order under lock failed due to opponent completing, but completion did not induce implicit ordering")
+          DecentralizedSGT.synchronized {
+            val establishedOrder = DecentralizedSGT.ensureOrder(pred, lookFor)
+            assert(establishedOrder == FirstFirst)
           }
         }
       }
@@ -307,21 +294,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         case SecondFirstSameSCC =>
           findOrPigeonHoleNonblocking(lookFor, from, fromIsKnownPredecessor, idx, nextGcUpto, knownSameSCC = true)
         case UnorderedSCCUnknown =>
-          val lockedRoot = SubsumableLock.acquireLock(lookFor, host.timeout)
-          if(knownSameSCC) {
-            try {
-              findOrPigeonHoleLocked(lookFor, from, fromIsKnownPredecessor, to, nextGcUpto)
-            } finally { lockedRoot.asyncUnlock() }
-          } else {
-            SubsumableLock.trySubsumeDefender(lockedRoot, candidate, host.timeout) match {
-              case Some(newLockedRoot) =>
-                try {
-                  findOrPigeonHoleLocked(lookFor, from, fromIsKnownPredecessor, to, nextGcUpto)
-                } finally { newLockedRoot.asyncUnlock() }
-              case None =>
-                assert(DecentralizedSGT.getOrder(candidate, lookFor) == FirstFirstSCCUnkown, s"continuing search under lock failed due to entry opponent completing, but completion did not induce implicit ordering")
-                findOrPigeonHoleNonblocking(lookFor, idx + 1, fromIsKnownPredecessor = true, to, nextGcUpto, knownSameSCC)
-            }
+          DecentralizedSGT.synchronized {
+            findOrPigeonHoleLocked(lookFor, from, fromIsKnownPredecessor, to, nextGcUpto)
           }
       }
     }
@@ -332,7 +306,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     if (to == from) {
       if(!fromKnownOrdered) {
         val pred = _versions(from - 1).txn
-        val establishedOrder = DecentralizedSGT.ensureOrder(pred, lookFor, host.timeout)
+        val establishedOrder = DecentralizedSGT.ensureOrder(pred, lookFor)
         assert(establishedOrder == FirstFirst)
       }
       (-from, canGCupto)
@@ -342,7 +316,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       val nextGcUpto = if(candidate.phase == TurnPhase.Completed) idx else canGCupto
       if(candidate == lookFor) {
         (idx, canGCupto)
-      } else DecentralizedSGT.ensureOrder(candidate, lookFor, host.timeout) match {
+      } else DecentralizedSGT.ensureOrder(candidate, lookFor) match {
         case FirstFirst =>
           findOrPigeonHoleLocked(lookFor, idx + 1, fromKnownOrdered = true, to, nextGcUpto)
         case SecondFirst =>

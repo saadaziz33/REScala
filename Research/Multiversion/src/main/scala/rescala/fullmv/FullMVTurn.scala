@@ -4,11 +4,11 @@ import java.util.concurrent.ForkJoinTask
 
 import rescala.core._
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.NoSuccessor
-import rescala.fullmv.mirrors.{FullMVTurnProxy, FullMVTurnReflectionProxy, Host, Hosted}
+import rescala.fullmv.mirrors.FullMVTurnProxy
 import rescala.fullmv.tasks.{Notification, Reevaluation}
 
-trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy with Hosted {
-  override val host: FullMVEngine
+trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
+  val engine: FullMVEngine
 
   //========================================================Internal Management============================================================
 
@@ -23,14 +23,10 @@ trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy with Hosted
   // should be mirrored/buffered locally
   def isTransitivePredecessor(txn: FullMVTurn): Boolean
 
-  // ===== Remote Replication Stuff
-  // should be local-only, but needs to be available on remote mirrors too to support multi-hop communication.
-  def addReplicator(replicator: FullMVTurnReflectionProxy): (TurnPhase.Type, Seq[Host.GUID])
-
   //========================================================Scheduler Interface============================================================
 
   override def makeDerivedStructState[P](valuePersistency: ValuePersistency[P]): NodeVersionHistory[P, FullMVTurn, ReSource[FullMVStruct], Reactive[FullMVStruct]] = {
-    val state = new NodeVersionHistory[P, FullMVTurn, ReSource[FullMVStruct], Reactive[FullMVStruct]](host.dummy, valuePersistency)
+    val state = new NodeVersionHistory[P, FullMVTurn, ReSource[FullMVStruct], Reactive[FullMVStruct]](engine.dummy, valuePersistency)
     state.incrementFrame(this)
     state
   }
@@ -72,7 +68,7 @@ trait FullMVTurn extends TurnImpl[FullMVStruct] with FullMVTurnProxy with Hosted
           followReev.fork()
         } else {
           // this should be the case if reactive is created during admission or wrap-up phase
-          host.threadPool.submit(followReev)
+          engine.threadPool.submit(followReev)
         }
       } else {
         if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive reevaluated, no successor reevaluation.")
