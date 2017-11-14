@@ -972,23 +972,9 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   def fullGC(): Int = synchronized {
+    findLastCompleted()
     arrangeVersionArray()
   }
-
-//  def fullGCLeaveHole(leaveInsertSlot: Int): Int = {
-//    if(size > 1) {
-//      val lastCompleted: Int = findLastCompleted
-//
-//      assert(_versions(lastCompleted).txn.phase == TurnPhase.Completed)
-//      // cannot make this assertion because the previously last completed turn may already no longer be the last turn at
-//      // this point, as successive turns might have concurrently completed
-//      //assert(lastCompleted + 1 == size || _versions(lastCompleted + 1).txn.phase != TurnPhase.Completed)
-//
-//      if (lastCompleted > 0) gcBeforeLeaveHole(lastCompleted, leaveInsertSlot) else 0
-//    } else {
-//      0
-//    }
-//  }
 
   private def findLastCompleted() = {
     @tailrec @inline def findLastCompleted(to: Int): Unit = {
@@ -1013,43 +999,6 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       findLastCompleted(firstFrame - 2)
     }
   }
-
-//  private def gcBeforeLeaveHole(knownCompleted: Int, leaveInsertSlot: Int): Int = {
-//    assert(leaveInsertSlot <= size)
-//    assert(knownCompleted > 0)
-//    val insertSlotIsLast = leaveInsertSlot == size
-//    if (_versions(knownCompleted).value.isDefined) {
-//      // if lastCompleted is a written version, then just dump all preceding versions
-//      firstFrame -= knownCompleted
-//      latestWritten -= knownCompleted
-//      val elementsBeforeSlot = leaveInsertSlot - knownCompleted
-//      System.arraycopy(_versions, knownCompleted, _versions, 0, elementsBeforeSlot)
-//      if(leaveInsertSlot < size) System.arraycopy(_versions, leaveInsertSlot, _versions, elementsBeforeSlot + 1, size - leaveInsertSlot)
-//      size -= knownCompleted
-//      java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + (if (insertSlotIsLast) 0 else 1), _versions.length, null)
-//      knownCompleted
-//    } else if (knownCompleted > 1) {
-//      // if lastCompleted is not a written version, then dump all preceding versions except for the last written one
-//      val dumpCount = knownCompleted - 1
-//      firstFrame -= dumpCount
-//      _versions(0) = if (latestWritten <= knownCompleted && _versions(latestWritten).txn.phase == TurnPhase.Completed) {
-//        val result = _versions(latestWritten)
-//        latestWritten = 0
-//        result
-//      } else {
-//        latestWritten -= dumpCount
-//        lastWriteUpTo(knownCompleted)
-//      }
-//      val elementsBeforeSlot = leaveInsertSlot - knownCompleted
-//      System.arraycopy(_versions, knownCompleted, _versions, 1, elementsBeforeSlot)
-//      if(leaveInsertSlot < size) System.arraycopy(_versions, leaveInsertSlot, _versions, elementsBeforeSlot + 2, size - leaveInsertSlot)
-//      size -= dumpCount
-//      java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + (if (insertSlotIsLast) 0 else 1), _versions.length, null)
-//      dumpCount
-//    } else {
-//      0
-//    }
-//  }
 
   def arrangeVersionArray(firstHole: Int = -1, secondHole: Int = -1): Int = {
     assert(firstHole >= 0 || secondHole < 0, "must not give only a second hole")
@@ -1085,7 +1034,6 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       }
     }
   }
-
 
   private def gcAndLeaveHoles(writeTo: Array[Version], hintVersionIsWritten: Boolean, create: Int, firstHole: Int, secondHole: Int) = {
     // if a straight dump using the gc hint makes enough room, just do that
