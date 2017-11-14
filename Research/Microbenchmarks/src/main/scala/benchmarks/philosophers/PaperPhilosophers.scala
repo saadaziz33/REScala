@@ -8,7 +8,7 @@ import rescala.parrp.Backoff
 import scala.annotation.tailrec
 import scala.concurrent.{Await, Future, TimeoutException}
 import scala.concurrent.duration._
-import scala.util.{Failure, Success}
+import scala.util.{Failure, Success, Try}
 
 class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynamicEdgeChanges: Boolean) {
   import engine._
@@ -17,8 +17,10 @@ class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynam
   case object Eating extends Philosopher
   case object Thinking extends Philosopher
 
-  val phils = for(j <- 0 until size) yield
-    Var[Philosopher](Thinking)
+  val phils = for(idx <- 0 until size) yield
+    REName.named(s"phil($idx)") { implicit! =>
+      Var[Philosopher](Thinking)
+    }
 
   sealed trait Fork
   case object Free extends Fork
@@ -135,24 +137,31 @@ object PaperPhilosophers {
       val end = System.currentTimeMillis() + duration
       () => System.currentTimeMillis() < end
     }
+
+    @volatile var abort: Boolean = false
     def driver(idx: Int): Int = {
-      var localCount = 0
-      while(continue()) {
-        table.eatRandomOnce(idx, threadCount)
-        localCount += 1
+      try {
+        var localCount = 0
+        while(!abort && continue()) {
+          table.eatRandomOnce(idx, threadCount)
+          localCount += 1
+        }
+        localCount
+      } finally {
+        abort = true
       }
-      localCount
     }
 
     val executor = Executors.newFixedThreadPool(threadCount)
     val execContext = scala.concurrent.ExecutionContext.fromExecutor(executor)
     val threads = for(i <- 0 until threadCount) yield Future { driver(i) }(execContext)
 
-    while(continue()) { Thread.sleep(10) }
+    while(threads.exists(!_.isCompleted) && continue()) { Thread.sleep(10) }
     val timeout = System.currentTimeMillis() + 500
     val scores = threads.map{ t =>
-      Await.ready(t, (timeout - System.currentTimeMillis()).millis )
-      t.value.get
+      Try { Await.ready(t, (timeout - System.currentTimeMillis()).millis ) }.flatMap {
+        _ => t.value.get
+      }
     }
     executor.shutdown()
 

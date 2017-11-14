@@ -1,24 +1,30 @@
 package rescala.fullmv.tasks
 
+import java.util.concurrent.locks.LockSupport
+
 import rescala.core.ReSource
 import rescala.fullmv.FramingBranchResult._
 import rescala.fullmv._
 
 trait FramingTask extends FullMVAction {
-  override def doCompute(): Traversable[FullMVAction] = {
+  override def compute(): Unit = {
     val branchResult = doFraming()
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this => $branchResult")
     branchResult match {
       case FramingBranchEnd =>
         Traversable.empty
       case Frame(out, maybeOtherTurn) =>
-        out.map(Framing(maybeOtherTurn, _))
+        for(dep <- out) maybeOtherTurn.taskQueue.offer(Framing(maybeOtherTurn, dep))
+        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
       case Deframe(out, maybeOtherTurn) =>
-        out.map(Deframing(maybeOtherTurn, _))
+        for(dep <- out) maybeOtherTurn.taskQueue.offer(Deframing(maybeOtherTurn, dep))
+        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
       case FrameSupersede(out, maybeOtherTurn, supersede) =>
-        out.map(SupersedeFraming(maybeOtherTurn, _, supersede))
+        for(dep <- out) maybeOtherTurn.taskQueue.offer(SupersedeFraming(maybeOtherTurn, dep, supersede))
+        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
       case DeframeReframe(out, maybeOtherTurn, reframe) =>
-        out.map(DeframeReframing(maybeOtherTurn, _, reframe))
+        for(dep <- out) maybeOtherTurn.taskQueue.offer(DeframeReframing(maybeOtherTurn, dep, reframe))
+        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
     }
   }
 

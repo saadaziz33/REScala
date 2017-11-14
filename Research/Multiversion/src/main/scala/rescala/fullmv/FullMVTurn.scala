@@ -5,6 +5,7 @@ import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
 import java.util.function.BiConsumer
 
 import rescala.core._
+import rescala.fullmv.NotificationResultAction.{GlitchFreeReady, NotificationOutAndSuccessorOperation}
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.NoSuccessor
 import rescala.fullmv.mirrors.FullMVTurnProxy
 import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation}
@@ -92,11 +93,15 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     (phase, selfNode)
   }
 
-  def addPredecessorAndReleasePhaseLock(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+  def addPredecessor(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
     @inline def predecessor = predecessorSpanningTree.txn
     assert(!isTransitivePredecessor(predecessor), s"attempted to establish already existing predecessor relation $predecessor -> $this")
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new predecessor $predecessor.")
     for(succ <- successorsIncludingSelf) succ.maybeNewReachableSubtree(this, predecessorSpanningTree)
+  }
+
+  def addPredecessorAndReleasePhaseLock(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+    addPredecessor(predecessorSpanningTree)
     phaseLock.unlock()
   }
 
@@ -108,14 +113,15 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   private def copySubTreeRootAndAssessChildren(attachBelow: FullMVTurn, spanningSubTreeRoot: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
     val newTransitivePredecessor = spanningSubTreeRoot.txn
-    newTransitivePredecessor.newSuccessor(this)
-    val copiedSpanningTreeNode = new MutableTransactionSpanningTreeNode(newTransitivePredecessor)
-    predecessorSpanningTreeNodes += newTransitivePredecessor -> copiedSpanningTreeNode
-    predecessorSpanningTreeNodes(attachBelow).children += copiedSpanningTreeNode
+    // last chance to check if predecessor completed concurrently
+    if(newTransitivePredecessor.phase != TurnPhase.Completed) {
+      newTransitivePredecessor.newSuccessor(this)
+      val copiedSpanningTreeNode = new MutableTransactionSpanningTreeNode(newTransitivePredecessor)
+      predecessorSpanningTreeNodes += newTransitivePredecessor -> copiedSpanningTreeNode
+      predecessorSpanningTreeNodes(attachBelow).children += copiedSpanningTreeNode
 
-    for (child <- spanningSubTreeRoot.children) {
-      if(!isTransitivePredecessor(child.txn)) {
-        copySubTreeRootAndAssessChildren(newTransitivePredecessor, child)
+      for (child <- spanningSubTreeRoot.children) {
+        maybeNewReachableSubtree(newTransitivePredecessor, child)
       }
     }
   }
@@ -159,21 +165,10 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     // reevaluation (if one is required) to have been completed, but cannot access values from subsequent turns
     // and hence does not need to wait for those.
     val ignitionNotification = Notification(this, reactive, changed = ignitionRequiresReevaluation)
-    val notificationResult = ignitionNotification.doCompute()
-    if(notificationResult.nonEmpty) {
-      assert(notificationResult.size == 1)
-      assert(notificationResult.head == Reevaluation(this, reactive))
-      val reevaluation = notificationResult.head.asInstanceOf[Reevaluation]
-      val nextReev = reevaluation.doCompute()
-      if(nextReev.nonEmpty) {
-        assert(notificationResult.size == 1)
-        assert(notificationResult.head.isInstanceOf[Reevaluation])
-        val followReev = notificationResult.head.asInstanceOf[Reevaluation]
-        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive reevaluated, delegating successor reevaluation for ${followReev.turn} to pool.")
-        taskQueue.offer(followReev)
-      } else {
-        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive reevaluated, no successor reevaluation.")
-      }
+    val notificationResult = ignitionNotification.deliverNotification()
+    assert(!notificationResult.isInstanceOf[NotificationOutAndSuccessorOperation[_, _]], s"$this ignite $reactive spawned something other than a reevaluation: $notificationResult")
+    if(notificationResult == GlitchFreeReady) {
+      Reevaluation(this, reactive).compute()
     } else {
       if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive did not spawn reevaluation.")
     }

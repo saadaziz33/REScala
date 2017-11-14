@@ -7,13 +7,13 @@ import rescala.fullmv._
 trait NotificationAction extends FullMVAction {
   val node: Reactive[FullMVStruct]
   val changed: Boolean
-  override def doCompute(): Traversable[FullMVAction] = {
+  override def compute(): Unit = {
     val notificationResultAction = deliverNotification()
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this => $notificationResultAction")
     processNotificationResult(notificationResultAction)
   }
 
-  def processNotificationResult(notificationResultAction: NotificationResultAction[FullMVTurn, Reactive[FullMVStruct]]): Traversable[FullMVAction] = {
+  def processNotificationResult(notificationResultAction: NotificationResultAction[FullMVTurn, Reactive[FullMVStruct]]): Unit = {
     notificationResultAction match {
       case GlitchFreeReadyButQueued =>
         Traversable.empty
@@ -22,7 +22,7 @@ trait NotificationAction extends FullMVAction {
       case NotGlitchFreeReady =>
         Traversable.empty
       case GlitchFreeReady =>
-        Traversable(Reevaluation(turn, node))
+        turn.taskQueue.offer(Reevaluation(turn, node))
       case outAndSucc: NotificationOutAndSuccessorOperation[FullMVTurn, Reactive[FullMVStruct]] =>
         Reevaluation.processReevaluationResult(node, turn, outAndSucc, changed = false)
     }

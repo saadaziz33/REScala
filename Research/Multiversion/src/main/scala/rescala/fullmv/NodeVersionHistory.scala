@@ -2,12 +2,32 @@ package rescala.fullmv
 
 import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.ForkJoinPool.ManagedBlocker
+import java.util.concurrent.locks.Lock
 
 import rescala.core.ValuePersistency
 
 import scala.annotation.elidable.ASSERTION
 import scala.annotation.{elidable, tailrec}
 import scala.collection.mutable.ArrayBuffer
+
+sealed trait SCCState {
+  def unlockedIfLocked(): Unit
+  def known: SCCState
+}
+sealed trait SCCConnectivity extends SCCState {
+  override def known: UnlockedSameSCC.type = UnlockedSameSCC
+}
+case object UnlockedUnknown extends SCCConnectivity {
+  override def unlockedIfLocked(): Unit = {}
+}
+case object UnlockedSameSCC extends SCCConnectivity {
+  override def unlockedIfLocked(): Unit = {}
+}
+case class LockedSameSCC(lock: Lock) extends SCCState {
+  override def unlockedIfLocked(): Unit = unlock()
+  override def known: this.type = this
+  def unlock(): UnlockedSameSCC.type = { lock.unlock(); UnlockedSameSCC }
+}
 
 sealed trait FramingBranchResult[+T, +R]
 object FramingBranchResult {
@@ -170,16 +190,16 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   var size = 1
   var latestValue: V = valuePersistency.initialValue
 
-  private def createHole(position: Int): Unit = {
-    if (_versions.length == size) {
-      val newVersions = new Array[Version](size + size / 2)
-      System.arraycopy(_versions, 0, newVersions, 0, position)
-      System.arraycopy(_versions, position, newVersions, position + 1, size - position)
-      _versions = newVersions
-    } else {
-      System.arraycopy(_versions, position, _versions, position + 1, size - position)
-    }
-  }
+//  private def createHole(position: Int): Unit = {
+//    if (_versions.length == size) {
+//      val newVersions = new Array[Version](size + size / 2)
+//      System.arraycopy(_versions, 0, newVersions, 0, position)
+//      System.arraycopy(_versions, position, newVersions, position + 1, size - position)
+//      _versions = newVersions
+//    } else {
+//      System.arraycopy(_versions, position, _versions, position + 1, size - position)
+//    }
+//  }
 
   private def createVersionInHole(position: Int, txn: T) = {
     val version = new Version(txn, stable = position <= firstFrame, _versions(position - 1).out, pending = 0, changed = 0, None)
@@ -229,39 +249,141 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     assert(posOrInsert >= 0 || Set[PartialOrderResult](FirstFirstSameSCC, FirstFirstSCCUnkown).contains(DecentralizedSGT.getOrder(_versions(-posOrInsert - 1).txn, lookFor)), s"binary search returned insert at ${-posOrInsert} for $lookFor, but predecessor isn't ordered first in $this")
     assert(posOrInsert >= 0 || -posOrInsert == to || DecentralizedSGT.getOrder(_versions(-posOrInsert).txn, lookFor) == SecondFirstSameSCC, s"binary search returned insert at ${-posOrInsert} for $lookFor, but it isn't ordered before successor in $this")
 
-    // compute a possible location for gc to leave a hole
-    val mustCreateVersion = versionRequired && posOrInsert < 0
-    val holeLocation = if (mustCreateVersion) -posOrInsert else size
-
-    // maybe perform gc and leave said hole
-    val gcdFromHint = if(canGCupto > 0) {
-      val gcd = gcBeforeLeaveHole(canGCupto, holeLocation)
-//      if(gcd == 0) assertOptimizationsIntegrity(s"hinted GC after search($lookFor, ${from - gcd}, ${to - gcd})->($canGCupto, $posOrInsert)")
-      gcd
+    if(posOrInsert < 0 && versionRequired) {
+      val gcd = arrangeVersionArray(canGCupto, -posOrInsert)
+      val pos = -posOrInsert - gcd
+      createVersionInHole(pos, lookFor)
+      (pos, gcd)
     } else {
-      0
+      (posOrInsert, 0)
     }
+  }
 
-    val gcd = if (versionRequired && size == _versions.length) {
-      assert(gcdFromHint == 0, s"gc based on search gc hint $canGCupto removed $gcdFromHint versions, but the array supposedly is still at max capacity in $this")
-      val gcd = fullGCLeaveHole(holeLocation)
-//      if(gcd == 0) assertOptimizationsIntegrity(s"full GC after search($lookFor, ${from - gcd}, ${to - gcd})->($canGCupto, $posOrInsert)")
-      gcd
+//  private def maybeGCandCreateVersion(lookFor: T, versionRequired: Boolean, posOrInsert: Int, canGCupto: Int): (Int, Int) = {
+//    // compute a possible location for gc to leave a hole
+//    val mustCreateVersion = versionRequired && posOrInsert < 0
+//    val holeLocation = if (mustCreateVersion) -posOrInsert else size
+//
+//    // maybe perform gc and leave said hole
+//    val gcdFromHint = if (canGCupto > 0) {
+//      gcBeforeLeaveHole(canGCupto, holeLocation)
+//    } else {
+//      0
+//    }
+//
+//    val gcd = if (versionRequired && size == _versions.length) {
+//      assert(gcdFromHint == 0, s"gc based on search gc hint $canGCupto removed $gcdFromHint versions, but the array supposedly is still at max capacity in $this")
+//      fullGCLeaveHole(holeLocation)
+//    } else {
+//      gcdFromHint
+//    }
+//
+//    // maybe create required version in the hole, create the hole beforehand if GC didn't
+//    if (mustCreateVersion) {
+//      val correctedHoleLocation = holeLocation - gcd
+//      if (gcd == 0) createHole(correctedHoleLocation)
+//      createVersionInHole(correctedHoleLocation, lookFor)
+//      (correctedHoleLocation, gcd)
+//    } else if (posOrInsert < 0) {
+//      (posOrInsert + gcd, gcd)
+//    } else {
+//      (posOrInsert - gcd, gcd)
+//    }
+//  }
+
+  val DEFAULT_MIN_POS = 0
+  /**
+    * determine the position or insertion point for a framing transaction
+    *
+    * @param txn the transaction
+    * @return the position (positive values) or insertion point (negative values)
+    */
+  private def getFramePositionFraming(txn: T, minPos: Int = DEFAULT_MIN_POS, canGCupto: Int = 0): (Int, Int) = {
+    val knownOrderedMinPosIsProvided = minPos != DEFAULT_MIN_POS
+    val fromFinal = if (knownOrderedMinPosIsProvided) minPos else latestWritten + 1
+    if(fromFinal == size) {
+//      val was = size == 11
+//      if(was) println(s"before: $this")
+      val gcd = arrangeVersionArray(canGCupto, size, -1)
+//      if(was) {
+//        println(s"after: $this")
+//        while(System.in.available() == 0) Thread.sleep(10)
+//      }
+      val pos = size
+      createVersionInHole(pos, txn)
+      (pos, gcd)
     } else {
-      gcdFromHint
+      val (insertOrFound, gcHint, _) = findOrPigeonHoleFramingPredictive(txn, fromFinal, knownOrderedMinPosIsProvided, size - 1, size, UnlockedUnknown, canGCupto)
+      if(insertOrFound < 0) {
+        val gcd = arrangeVersionArray(canGCupto, -insertOrFound, -1)
+        val pos = -insertOrFound - gcd
+        createVersionInHole(pos, txn)
+        (pos, gcd)
+      } else {
+        (insertOrFound, 0)
+      }
     }
+  }
 
-    // maybe create required version in the hole, create the hole beforehand if GC didn't
-    if(mustCreateVersion) {
-      val correctedHoleLocation = holeLocation - gcd
-      if(gcd == 0) createHole(correctedHoleLocation)
-      createVersionInHole(correctedHoleLocation, lookFor)
-//      if(gcd != 0) assertOptimizationsIntegrity(s"search($lookFor, ${from - gcd}, ${to - gcd})->($canGCupto, $posOrInsert)+gcd($gcd)+insertion($correctedHoleLocation)")
-      (correctedHoleLocation, gcd)
-    } else if (posOrInsert < 0) {
-      (posOrInsert + gcd, gcd)
+  private def getFramePositionsFraming(one: T, two: T): (Int, Int) = {
+    val res@(pOne, pTwo) = getFramePositionsFraming0(one, two)
+    assert(_versions(pOne).txn == one, s"first position $pOne doesn't correspond to first transaction $one in $this")
+    assert(_versions(pTwo).txn == two, s"second position $pTwo doesn't correspond to second transaction $two in $this")
+
+    assert(_versions(pOne - 1).txn.phase == TurnPhase.Completed || one.isTransitivePredecessor(_versions(pOne - 1).txn), s"first $one isn't ordered after its predecessor ${_versions(pOne - 1).txn}")
+    assert(_versions(pOne + 1).txn.isTransitivePredecessor(one), s"first $one isn't ordered before its successor ${_versions(pOne + 1).txn}")
+    assert(_versions(pTwo - 1).txn.phase == TurnPhase.Completed || two.isTransitivePredecessor(_versions(pTwo - 1).txn), s"second $two isn't ordered after its predecessor ${_versions(pTwo - 1).txn}")
+    assert(pTwo + 1 == size || _versions(pTwo + 1).txn.isTransitivePredecessor(two), s"second $two isn't ordered before its successor ${_versions(pTwo + 1).txn}")
+    res
+  }
+  private def getFramePositionsFraming0(one: T, two: T): (Int, Int) = {
+    val fromFinal = latestWritten + 1
+    if(fromFinal == size) {
+      // shortcut: insert both versions at the end
+      if(size + 2 > _versions.length) arrangeVersionArray(gcHint = 0, size, size)
+      val out = _versions(size - 1).out
+      val stable = firstFrame == size
+      val first = size
+      _versions(first) = new Version(one, stable, out, pending = 0, changed = 0, value = None)
+      val second = size + 1
+      _versions(second) = new Version(two, stable, out, pending = 0, changed = 0, value = None)
+      size += 2
+      if(stable) firstFrame += 2
+      (first, second)
     } else {
-      (posOrInsert - gcd, gcd)
+      val (insertOrFoundOne, gcHintOne, sccState) = findOrPigeonHoleFramingPredictive(one, fromFinal, fromFinalPredecessorRelationIsRecorded = false, size - 1, size, UnlockedUnknown, canGCupto = 0)
+      if(insertOrFoundOne >= 0) {
+        // first one found: defer to just look for the second alone
+        val (insertOrFoundTwo, gcd) = getFramePositionFraming(two, insertOrFoundOne + 1, gcHintOne)
+        (insertOrFoundOne - gcd, insertOrFoundTwo)
+      } else {
+        // first one not found:
+        val insertOne = -insertOrFoundOne
+        if (insertOne == size) {
+          val gcd = arrangeVersionArray(gcHintOne, insertOne, size)
+          val first = insertOne - gcd
+          createVersionInHole(first, one)
+          val second = size
+          createVersionInHole(second, two)
+          (first, second)
+        } else {
+          val (insertOrFoundTwo, gcHintTwo, _) = findOrPigeonHoleFramingPredictive(two, insertOne, fromFinalPredecessorRelationIsRecorded = false, size - 1, size, sccState, gcHintOne)
+          if (insertOrFoundTwo >= 0) {
+            val gcd = arrangeVersionArray(gcHintTwo, insertOne)
+            val first = insertOne - gcd
+            createVersionInHole(first, one)
+            (first, insertOrFoundTwo - gcd + 1)
+          } else {
+            val insertTwo = -insertOrFoundTwo
+            val gcd = arrangeVersionArray(gcHintTwo, insertOne, insertTwo)
+            val first = insertOne - gcd
+            val second = insertTwo - gcd + 1
+            createVersionInHole(first, one)
+            createVersionInHole(second, two)
+            (first, second)
+          }
+        }
+      }
     }
   }
 
@@ -324,15 +446,86 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       }
     }
   }
+  private def findOrPigeonHoleFramingPredictive(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toFinal: Int, sccState: SCCConnectivity, canGCupto: Int): (Int, Int, SCCConnectivity) = {
+    assert(fromFinal <= toFinal, s"binary search started with backwards indices from $fromFinal to $toFinal")
+    assert(toFinal <= size, s"binary search upper bound $toFinal beyond history size $size")
+    assert(toFinal == size || Set[PartialOrderResult](SecondFirstSameSCC, UnorderedSCCUnknown).contains(DecentralizedSGT.getOrder(_versions(toFinal).txn, lookFor)), s"to = $toFinal successor for non-blocking search of known static $lookFor pointed to version of ${_versions(toFinal).txn} which is ordered earlier.")
+    assert(DecentralizedSGT.getOrder(_versions(fromFinal - 1).txn, lookFor) != SecondFirstSameSCC, s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
+    assert(fromFinal > 0, s"binary search started with non-positive lower bound $fromFinal")
 
-  /**
-    * determine the position or insertion point for a framing transaction
-    *
-    * @param txn the transaction
-    * @return the position (positive values) or insertion point (negative values)
-    */
-  private def getFramePositionFraming(txn: T, minPos: Int): (Int, Int) = {
-    findOrPigeonHole(txn, minPos, size, versionRequired = true)
+    val r@(posOrInsert, canGCuptoY, connectivity) = findOrPigeonHoleFramingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toFinal: Int, sccState: SCCConnectivity, canGCupto: Int)
+
+    assert(_versions(canGCuptoY).txn.phase == TurnPhase.Completed, s"binary search returned $posOrInsert for $lookFor with GC hint $canGCuptoY pointing to a non-completed transaction in $this")
+    assert(canGCuptoY < math.abs(posOrInsert), s"binary search returned $posOrInsert for $lookFor inside garbage collected section (< $canGCuptoY) in $this")
+
+    assert(posOrInsert < size, s"binary search returned found at $posOrInsert for $lookFor, which is out of bounds in $this")
+    assert(posOrInsert < 0 || _versions(posOrInsert).txn == lookFor, s"binary search returned found at $posOrInsert for $lookFor, which is wrong in $this")
+    assert(posOrInsert >= 0 || -posOrInsert <= size, s"binary search returned insert at ${-posOrInsert}, which is out of bounds in $this")
+    assert(posOrInsert >= 0 || Set[PartialOrderResult](FirstFirstSameSCC, FirstFirstSCCUnkown).contains(DecentralizedSGT.getOrder(_versions(-posOrInsert - 1).txn, lookFor)), s"binary search returned insert at ${-posOrInsert} for $lookFor, but predecessor isn't ordered first in $this")
+    assert(posOrInsert >= 0 || -posOrInsert == toFinal || DecentralizedSGT.getOrder(_versions(-posOrInsert).txn, lookFor) == SecondFirstSameSCC, s"binary search returned insert at ${-posOrInsert} for $lookFor, but it isn't ordered before successor in $this")
+
+    r
+  }
+
+  @tailrec
+  private def findOrPigeonHoleFramingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toFinal: Int, sccState: SCCConnectivity, canGCupto: Int): (Int, Int, SCCConnectivity) = {
+    if(fromSpeculative == toFinal) {
+      if (fromSpeculative > fromFinal) {
+        val predToRecord = _versions(fromSpeculative - 1).txn
+        if(predToRecord.phase == TurnPhase.Completed) {
+          // last chance to skip recording effort if predecessor completed concurrently
+          (-fromSpeculative, canGCupto, sccState)
+        } else {
+          val lock = DecentralizedSGT.acquireLock(predToRecord, lookFor, sccState)
+          if (predToRecord.isTransitivePredecessor(lookFor)) {
+            // reverse order with from was recorded concurrently, fall back to (final, x) range
+            findOrPigeonHoleFramingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromFinal, fromSpeculative, lock.unlock(), canGCupto)
+          } else {
+            // establish order with from if it wasn't already by a concurrent thread
+            if (!lookFor.isTransitivePredecessor(predToRecord)) lookFor.addPredecessor(predToRecord.selfNode)
+            (-fromSpeculative, canGCupto, lock.unlock())
+          }
+        }
+      } else if (!fromFinalPredecessorRelationIsRecorded) {
+        val predToRecord = _versions(fromSpeculative - 1).txn
+        assert(!predToRecord.isTransitivePredecessor(lookFor), s"$predToRecord was concurrently ordered after $lookFor although we assumed this to be impossible")
+        if(predToRecord.phase == TurnPhase.Completed) {
+          // last chance to skip recording effort if predecessor completed concurrently
+          (-fromSpeculative, canGCupto, sccState)
+        } else {
+          val lock = DecentralizedSGT.acquireLock(predToRecord, lookFor, sccState)
+          if (!lookFor.isTransitivePredecessor(predToRecord)) lookFor.addPredecessor(predToRecord.selfNode)
+          (-fromSpeculative, canGCupto, lock.unlock())
+        }
+      } else {
+        // there is no from to order
+        (-fromSpeculative, canGCupto, sccState)
+      }
+    } else {
+      val probe = fromSpeculative+(toFinal-fromSpeculative-1)/2
+      val candidate = _versions(probe).txn
+      if(candidate == lookFor) {
+        (probe, canGCupto, sccState.known)
+      } else {
+        candidate.phase match {
+          case TurnPhase.Completed =>
+            findOrPigeonHoleFramingPredictive0(lookFor, probe + 1, fromFinalPredecessorRelationIsRecorded = true, probe + 1, toFinal, sccState, probe)
+          case TurnPhase.Executing =>
+            assert(!candidate.isTransitivePredecessor(lookFor), s"framing $lookFor should not be predecessor of some executing $candidate")
+            findOrPigeonHoleFramingPredictive0(lookFor, probe + 1, fromFinalPredecessorRelationIsRecorded = false, probe + 1, toFinal, sccState, canGCupto)
+          case TurnPhase.Framing =>
+            if (lookFor.isTransitivePredecessor(candidate)) {
+              findOrPigeonHoleFramingPredictive0(lookFor, probe + 1, fromFinalPredecessorRelationIsRecorded = true, probe + 1, toFinal, sccState.known, canGCupto)
+            } else if (candidate.isTransitivePredecessor(lookFor)) {
+              findOrPigeonHoleFramingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, probe, sccState.known, canGCupto)
+            } else {
+              findOrPigeonHoleFramingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, probe + 1, toFinal, sccState, canGCupto)
+            }
+          case unknown =>
+            throw new AssertionError(s"$candidate has unknown phase $unknown")
+        }
+      }
+    }
   }
 
   private def getFramePositionPropagating(txn: T): (Int, Int) = {
@@ -340,7 +533,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       // common-case shortcut attempt: receive notification for firstFrame
       (firstFrame, 0)
     else
-      getFramePositionFraming(txn, latestWritten + 1)
+      findOrPigeonHole(txn, latestWritten + 1, size, versionRequired = true)
   }
 
   /**
@@ -367,7 +560,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param txn the transaction visiting the node for framing
     */
   override def incrementFrame(txn: T): FramingBranchResult[T, OutDep] = synchronized {
-    val result = incrementFrame0(txn)
+    val result = incrementFrame0(txn, getFramePositionFraming(txn)._1)
     assertOptimizationsIntegrity(s"incrementFrame($txn) -> $result")
     result
   }
@@ -378,43 +571,40 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param supersede the transaction whose frame was superseded by the visiting transaction at the previous node
     */
   override def incrementSupersedeFrame(txn: T, supersede: T): FramingBranchResult[T, OutDep] = synchronized {
-    val position = getFramePositionFraming(txn, latestWritten + 1)._1
+    val (position, supersedePos) = getFramePositionsFraming(txn, supersede)
     val version = _versions(position)
     version.pending += 1
     val result = if(position < firstFrame && _versions(position).pending == 1) {
-      val(supersedePos, gcd) = getFramePositionFraming(supersede, position)
       _versions(supersedePos).pending -= 1
-      incrementFrameResultAfterNewFirstFrameWasCreated(txn, position - gcd)
+      incrementFrameResultAfterNewFirstFrameWasCreated(txn, position)
     } else {
-      decrementFrame0(supersede, position)
+      decrementFrame0(supersede, supersedePos)
     }
     assertOptimizationsIntegrity(s"incrementSupersedeFrame($txn, $supersede) -> $result")
     result
   }
 
   override def decrementFrame(txn: T): FramingBranchResult[T, OutDep] = synchronized {
-    val result = decrementFrame0(txn)
+    val result = decrementFrame0(txn, getFramePositionFraming(txn)._1)
     assertOptimizationsIntegrity(s"decrementFrame($txn) -> $result")
     result
   }
 
   override def decrementReframe(txn: T, reframe: T): FramingBranchResult[T, OutDep] = synchronized {
-    val position = getFramePositionFraming(txn, latestWritten + 1)._1
+    val (position, reframePos) = getFramePositionsFraming(txn, reframe)
     val version = _versions(position)
     version.pending += -1
     val result = if(position == firstFrame && version.pending == 0) {
-      val(reframePos, gcd) = getFramePositionFraming(reframe, position)
       _versions(reframePos).pending += 1
-      deframeResultAfterPreviousFirstFrameWasRemoved(txn, position - gcd)
+      deframeResultAfterPreviousFirstFrameWasRemoved(txn, position)
     } else {
-      incrementFrame0(reframe, position)
+      incrementFrame0(reframe, reframePos)
     }
     assertOptimizationsIntegrity(s"deframeReframe($txn, $reframe) -> $result")
     result
   }
 
-  private def incrementFrame0(txn: T, minPos: Int = latestWritten + 1): FramingBranchResult[T, OutDep] = {
-    val position = getFramePositionFraming(txn, minPos)._1
+  private def incrementFrame0(txn: T, position: Int): FramingBranchResult[T, OutDep] = {
     val version = _versions(position)
     version.pending += 1
     if (position < firstFrame && version.pending == 1) {
@@ -424,8 +614,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     }
   }
 
-  private def decrementFrame0(txn: T, minPos: Int = latestWritten + 1): FramingBranchResult[T, OutDep] = {
-    val position = getFramePositionFraming(txn, minPos)._1
+  private def decrementFrame0(txn: T, position: Int): FramingBranchResult[T, OutDep] = {
     val version = _versions(position)
     version.pending -= 1
     if (position == firstFrame && version.pending == 0) {
@@ -817,77 +1006,177 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   def fullGC(): Int = synchronized {
-    fullGCLeaveHole(size)
+    arrangeVersionArray()
   }
 
-  def fullGCLeaveHole(leaveInsertSlot: Int): Int = {
-    if(size > 1) {
-      @tailrec @inline def findLastCompleted(from: Int, to: Int): Int = {
-        if (to < from) {
-          if (_versions(from).txn.phase == TurnPhase.Completed) from else from - 1
+//  def fullGCLeaveHole(leaveInsertSlot: Int): Int = {
+//    if(size > 1) {
+//      val lastCompleted: Int = findLastCompleted
+//
+//      assert(_versions(lastCompleted).txn.phase == TurnPhase.Completed)
+//      // cannot make this assertion because the previously last completed turn may already no longer be the last turn at
+//      // this point, as successive turns might have concurrently completed
+//      //assert(lastCompleted + 1 == size || _versions(lastCompleted + 1).txn.phase != TurnPhase.Completed)
+//
+//      if (lastCompleted > 0) gcBeforeLeaveHole(lastCompleted, leaveInsertSlot) else 0
+//    } else {
+//      0
+//    }
+//  }
+
+  private def findLastCompleted(from: Int): Int = {
+    @tailrec @inline def findLastCompleted(from: Int, to: Int): Int = {
+      if (to < from) {
+        if (_versions(from).txn.phase == TurnPhase.Completed) from else from - 1
+      } else {
+        val idx = from + (to - from - 1) / 2
+        val candidate = _versions(idx).txn
+        if (candidate.phase == TurnPhase.Completed) {
+          // maybe candidate is last completed
+          if (_versions(idx + 1).txn.phase == TurnPhase.Completed) findLastCompleted(idx + 1, to) else idx
         } else {
-          val idx = from + (to - from - 1) / 2
-          val candidate = _versions(idx).txn
-          if (candidate.phase == TurnPhase.Completed) {
-            // maybe candidate is last completed
-            if (_versions(idx + 1).txn.phase == TurnPhase.Completed) findLastCompleted(idx + 1, to) else idx
-          } else {
-            // maybe candidate is first uncompleted
-            if (_versions(idx - 1).txn.phase == TurnPhase.Completed) idx - 1 else findLastCompleted(from, idx - 1)
-          }
+          // maybe candidate is first uncompleted
+          if (_versions(idx - 1).txn.phase == TurnPhase.Completed) idx - 1 else findLastCompleted(from, idx - 1)
         }
       }
-      val lastCompleted = if(_versions(firstFrame - 1).txn.phase == TurnPhase.Completed)
-        // common case shortcut and corner case: all transactions that can be completed are completed (e.g., graph is in resting state)
-        firstFrame - 1
-      else
-        findLastCompleted(1, firstFrame - 2)
+    }
 
-      assert(_versions(lastCompleted).txn.phase == TurnPhase.Completed)
-      // cannot make this assertion because the previously last completed turn may already no longer be the last turn at
-      // this point, as successive turns might have concurrently completed
-      //assert(lastCompleted + 1 == size || _versions(lastCompleted + 1).txn.phase != TurnPhase.Completed)
+    val lastCompleted = if (_versions(firstFrame - 1).txn.phase == TurnPhase.Completed)
+    // common case shortcut and corner case: all transactions that can be completed are completed (e.g., graph is in resting state)
+      firstFrame - 1
+    else
+      findLastCompleted(from, firstFrame - 2)
+    lastCompleted
+  }
 
-      if (lastCompleted > 0) gcBeforeLeaveHole(lastCompleted, leaveInsertSlot) else 0
-    } else {
+//  private def gcBeforeLeaveHole(knownCompleted: Int, leaveInsertSlot: Int): Int = {
+//    assert(leaveInsertSlot <= size)
+//    assert(knownCompleted > 0)
+//    val insertSlotIsLast = leaveInsertSlot == size
+//    if (_versions(knownCompleted).value.isDefined) {
+//      // if lastCompleted is a written version, then just dump all preceding versions
+//      firstFrame -= knownCompleted
+//      latestWritten -= knownCompleted
+//      val elementsBeforeSlot = leaveInsertSlot - knownCompleted
+//      System.arraycopy(_versions, knownCompleted, _versions, 0, elementsBeforeSlot)
+//      if(leaveInsertSlot < size) System.arraycopy(_versions, leaveInsertSlot, _versions, elementsBeforeSlot + 1, size - leaveInsertSlot)
+//      size -= knownCompleted
+//      java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + (if (insertSlotIsLast) 0 else 1), _versions.length, null)
+//      knownCompleted
+//    } else if (knownCompleted > 1) {
+//      // if lastCompleted is not a written version, then dump all preceding versions except for the last written one
+//      val dumpCount = knownCompleted - 1
+//      firstFrame -= dumpCount
+//      _versions(0) = if (latestWritten <= knownCompleted && _versions(latestWritten).txn.phase == TurnPhase.Completed) {
+//        val result = _versions(latestWritten)
+//        latestWritten = 0
+//        result
+//      } else {
+//        latestWritten -= dumpCount
+//        lastWriteUpTo(knownCompleted)
+//      }
+//      val elementsBeforeSlot = leaveInsertSlot - knownCompleted
+//      System.arraycopy(_versions, knownCompleted, _versions, 1, elementsBeforeSlot)
+//      if(leaveInsertSlot < size) System.arraycopy(_versions, leaveInsertSlot, _versions, elementsBeforeSlot + 2, size - leaveInsertSlot)
+//      size -= dumpCount
+//      java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + (if (insertSlotIsLast) 0 else 1), _versions.length, null)
+//      dumpCount
+//    } else {
+//      0
+//    }
+//  }
+
+  def arrangeVersionArray(gcHint: Int = 0, firstHole: Int = -1, secondHole: Int = -1): Int = {
+    assert(firstHole >= 0 || secondHole < 0, "must not give only a second hole")
+    assert(secondHole < 0 || secondHole >= firstHole, "second hole must be behind or at first")
+    val create = (if(firstHole >= 0) 1 else 0) + (if(secondHole >= 0) 1 else 0)
+    if(firstHole == size && size + create <= _versions.length) {
+      // if only versions should be added at the end (i.e., existing versions don't need to be moved) and there's enough room, just don't do anything
       0
+    } else {
+      if(NodeVersionHistory.DEBUG_GC) println(s"gc required to insert $create. before: $this")
+      val hintVersionIsWritten = _versions(gcHint).value.isDefined
+      val straightDump = gcHint - (if (hintVersionIsWritten) 0 else 1)
+      if (size - straightDump + create <= _versions.length) {
+        if(NodeVersionHistory.DEBUG_GC) println(s"hintgc($gcHint): -$straightDump accepted")
+        gcAndLeaveHoles(_versions, gcHint, hintVersionIsWritten, create, firstHole, secondHole)
+      } else {
+        // straight dump with gc hint isn't enough: see what full GC brings
+        if(NodeVersionHistory.DEBUG_GC) println(s"hintgc($gcHint): $straightDump rejected")
+        val lastCompleted = findLastCompleted(gcHint)
+        val fullGCVersionIsWritten = _versions(lastCompleted).value.isDefined
+        val fullDump = lastCompleted - (if (fullGCVersionIsWritten) 0 else 1)
+        if (size - fullDump + create <= _versions.length) {
+          if(NodeVersionHistory.DEBUG_GC) println(s"fullgc($lastCompleted): -$fullDump accepted")
+          gcAndLeaveHoles(_versions, lastCompleted, fullGCVersionIsWritten, create, firstHole, secondHole)
+        } else {
+          // full GC also isn't enough either: grow the array.
+          if(NodeVersionHistory.DEBUG_GC) println(s"fullgc($lastCompleted): -$fullDump insufficient, growing.")
+          val grown = new Array[Version](_versions.length + _versions.length >> 1)
+          val gcd = gcAndLeaveHoles(grown, lastCompleted, fullGCVersionIsWritten, create, firstHole, secondHole)
+          _versions = grown
+          gcd
+        }
+      }
     }
   }
 
-  private def gcBeforeLeaveHole(knownCompleted: Int, leaveInsertSlot: Int): Int = {
-    assert(leaveInsertSlot <= size)
-    assert(knownCompleted > 0)
-    val insertSlotIsLast = leaveInsertSlot == size
-    if (_versions(knownCompleted).value.isDefined) {
-      // if lastCompleted is a written version, then just dump all preceding versions
-      firstFrame -= knownCompleted
-      latestWritten -= knownCompleted
-      val elementsBeforeSlot = leaveInsertSlot - knownCompleted
-      System.arraycopy(_versions, knownCompleted, _versions, 0, elementsBeforeSlot)
-      if(leaveInsertSlot < size) System.arraycopy(_versions, leaveInsertSlot, _versions, elementsBeforeSlot + 1, size - leaveInsertSlot)
-      size -= knownCompleted
-      java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + (if (insertSlotIsLast) 0 else 1), _versions.length, null)
-      knownCompleted
-    } else if (knownCompleted > 1) {
-      // if lastCompleted is not a written version, then dump all preceding versions except for the last written one
-      val dumpCount = knownCompleted - 1
-      firstFrame -= dumpCount
-      _versions(0) = if (latestWritten <= knownCompleted && _versions(latestWritten).txn.phase == TurnPhase.Completed) {
+
+  private def gcAndLeaveHoles(writeTo: Array[Version], gcHint: Int, hintVersionIsWritten: Boolean, create: Int, firstHole: Int, secondHole: Int) = {
+    // if a straight dump using the gc hint makes enough room, just do that
+    val dumpCount = if (hintVersionIsWritten) {
+      if(NodeVersionHistory.DEBUG_GC) println(s"hint is written: dumping $gcHint to offset 0")
+      // if hint is written, just dump everything before
+      latestWritten -= gcHint
+      dumpToOffsetAndLeaveHoles(writeTo, gcHint, 0, firstHole, secondHole)
+      gcHint
+    } else {
+      // otherwise find the latest write before the hint, move it to index 0, and only dump everything else
+      val dumpCount = gcHint - 1
+      writeTo(0) = if (latestWritten <= gcHint && _versions(latestWritten).txn.phase == TurnPhase.Completed) {
+        if(NodeVersionHistory.DEBUG_GC) println(s"hint is not written: preserving last write $latestWritten and dumping $dumpCount to offset 1")
         val result = _versions(latestWritten)
         latestWritten = 0
         result
       } else {
+        val result = lastWriteUpTo(dumpCount)
+        if(NodeVersionHistory.DEBUG_GC) println(s"hint is not written: preserving last write by ${result.txn.hashCode()} and dumping $dumpCount to offset 1")
         latestWritten -= dumpCount
-        lastWriteUpTo(knownCompleted)
+        result
       }
-      val elementsBeforeSlot = leaveInsertSlot - knownCompleted
-      System.arraycopy(_versions, knownCompleted, _versions, 1, elementsBeforeSlot)
-      if(leaveInsertSlot < size) System.arraycopy(_versions, leaveInsertSlot, _versions, elementsBeforeSlot + 2, size - leaveInsertSlot)
-      size -= dumpCount
-      java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + (if (insertSlotIsLast) 0 else 1), _versions.length, null)
+      dumpToOffsetAndLeaveHoles(writeTo, gcHint, 1, firstHole, secondHole)
       dumpCount
+    }
+    val sizeBefore = size
+    firstFrame -= dumpCount
+    size -= dumpCount
+    if ((_versions eq writeTo) && size + create < sizeBefore) java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + create, sizeBefore, null)
+    dumpCount
+  }
+
+  private def dumpToOffsetAndLeaveHoles(writeTo: Array[Version], retainFrom: Int, retainTo: Int, firstHole: Int, secondHole: Int) = {
+    // just dump everything before the hint
+    if (firstHole < 0 || firstHole == size) {
+      // no hole or holes at the end only: the entire array stays in one segment
+      System.arraycopy(_versions, retainFrom, writeTo, retainTo, size - retainFrom)
     } else {
-      0
+      // copy first segment
+      System.arraycopy(_versions, retainFrom, writeTo, retainTo, firstHole - retainFrom)
+      if (secondHole < 0 || secondHole == size) {
+        // no second hole or second hole at the end only: there are only two segments
+        System.arraycopy(_versions, firstHole, writeTo, retainTo + firstHole - retainFrom + 1, size - firstHole)
+      } else if (secondHole == firstHole) {
+        // second hole same as first one: there are still only two segments, but leave two holes between
+        System.arraycopy(_versions, firstHole, writeTo, retainTo + firstHole - retainFrom + 2, size - firstHole)
+      } else {
+        // three segments with one hole between each
+        System.arraycopy(_versions, firstHole, writeTo, retainTo + firstHole - retainFrom + 1, secondHole - firstHole)
+        System.arraycopy(_versions, firstHole, writeTo, retainTo + secondHole - retainFrom + 2, size - secondHole)
+      }
     }
   }
+}
+
+object NodeVersionHistory {
+  val DEBUG_GC = false
 }

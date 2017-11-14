@@ -1,6 +1,22 @@
 package rescala.fullmv
 
+import java.util.concurrent.locks.{Lock, ReentrantLock}
+
 object DecentralizedSGT extends SerializationGraphTracking[FullMVTurn] {
+  val lock: Lock = new ReentrantLock()
+
+  def acquireLock(defender: FullMVTurn, contender: FullMVTurn, sccState: SCCState): LockedSameSCC = {
+    sccState match {
+      case x@LockedSameSCC(_) => x
+      case UnlockedSameSCC =>
+        lock.lock()
+        LockedSameSCC(lock)
+      case UnlockedUnknown =>
+        lock.lock()
+        LockedSameSCC(lock)
+    }
+  }
+
   override def getOrder(defender: FullMVTurn, contender: FullMVTurn): PartialOrderResult = {
     assert(defender != contender, s"$defender compared with itself..?")
     assert(defender.phase > TurnPhase.Initialized, s"$defender is not started and should thus not be involved in any operations")
