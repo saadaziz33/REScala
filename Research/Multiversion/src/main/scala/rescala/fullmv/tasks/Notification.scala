@@ -7,7 +7,7 @@ import rescala.fullmv._
 trait NotificationAction extends FullMVAction {
   val node: Reactive[FullMVStruct]
   val changed: Boolean
-  override def compute(): Unit = {
+  override def doCompute(): Unit = {
     val notificationResultAction = deliverNotification()
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this => $notificationResultAction")
     processNotificationResult(notificationResultAction)

@@ -147,8 +147,10 @@ object PaperPhilosophers {
           localCount += 1
         }
         localCount
-      } finally {
-        abort = true
+      } catch {
+        case t: Throwable =>
+          abort = true
+          throw t
       }
     }
 
@@ -157,7 +159,7 @@ object PaperPhilosophers {
     val threads = for(i <- 0 until threadCount) yield Future { driver(i) }(execContext)
 
     while(threads.exists(!_.isCompleted) && continue()) { Thread.sleep(10) }
-    val timeout = System.currentTimeMillis() + 500
+    val timeout = System.currentTimeMillis() + 3000
     val scores = threads.map{ t =>
       Try { Await.ready(t, (timeout - System.currentTimeMillis()).millis ) }.flatMap {
         _ => t.value.get

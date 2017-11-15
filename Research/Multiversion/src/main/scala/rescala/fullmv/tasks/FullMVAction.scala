@@ -6,5 +6,10 @@ import rescala.fullmv.FullMVTurn
 
 trait FullMVAction extends RecursiveAction {
   val turn: FullMVTurn
-  override def compute(): Unit
+  override def compute(): Unit = {
+    try { doCompute() } catch {
+      case t: Throwable => throw new Exception(this + " failed on " + Thread.currentThread().getName, t)
+    }
+  }
+  def doCompute(): Unit
 }

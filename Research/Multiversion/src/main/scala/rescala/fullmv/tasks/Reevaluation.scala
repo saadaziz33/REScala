@@ -10,7 +10,7 @@ import rescala.fullmv._
 import scala.util.{Failure, Success, Try}
 
 case class Reevaluation(turn: FullMVTurn, node: Reactive[FullMVStruct]) extends FullMVAction {
-  override def compute(): Unit = {
+  override def doCompute(): Unit = {
     assert(turn.phase == TurnPhase.Executing, s"$this cannot reevaluate (requires executing phase")
     val result = turn.engine.withTurn(turn){ Try { node.reevaluate(turn, node.state.reevIn(turn), node.state.incomings) } }
     result match {
