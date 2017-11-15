@@ -1,10 +1,10 @@
 package benchmarks.philosophers
 
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 import benchmarks.{EngineParam, Workload}
 import org.openjdk.jmh.annotations._
-import org.openjdk.jmh.infra.{BenchmarkParams, ThreadParams}
+import org.openjdk.jmh.infra.{BenchmarkParams, Blackhole, ThreadParams}
 import rescala.core.Struct
 
 @BenchmarkMode(Array(Mode.Throughput))
@@ -28,6 +28,9 @@ class PaperCompetition[S <: Struct] {
   var philosophers: Int = _
   var table: PaperPhilosophers[S] = _
 
+  @Param(Array("false"))
+  var runBusyThreads: Boolean = _
+
   @Setup(Level.Trial)
   def printSystemStats() = {
     var assertions = false
@@ -42,5 +45,43 @@ class PaperCompetition[S <: Struct] {
   @Setup(Level.Iteration)
   def setup(params: BenchmarkParams, work: Workload, engineParam: EngineParam[S]) = {
     table = new PaperPhilosophers(philosophers, engineParam.engine, dynamicity == "dynamic")
+  }
+
+  @volatile var running: Boolean = false
+  var threads: Array[Thread] = _
+  @Setup(Level.Iteration)
+  def bootBusyThreads(params: BenchmarkParams) = {
+    if(runBusyThreads) {
+      running = true
+      val numProcs = Runtime.getRuntime.availableProcessors()
+      val idleProcs = numProcs - params.getThreads
+      val startLatch = new CountDownLatch(idleProcs)
+      threads = Array.tabulate(idleProcs) { i =>
+        val t = new Thread(s"busy-idler-$i") {
+          override def run(): Unit = {
+            startLatch.countDown()
+            while (running) Blackhole.consumeCPU(1000L)
+          }
+        }
+        t.start()
+        t
+      }
+      println(s"starting $idleProcs busy threads...")
+      if (!startLatch.await(1000, TimeUnit.MILLISECONDS)) {
+        println(startLatch.getCount + " busy threads failed to start")
+      }
+    }
+  }
+  @TearDown(Level.Iteration)
+  def stopBusyThreads() = {
+    if(runBusyThreads) {
+      println("stopping busy threads...")
+      val timeout = System.currentTimeMillis() + 1000
+      running = false
+      for (t <- threads) {
+        t.join(timeout - System.currentTimeMillis())
+        if (t.isAlive) println(t.getName + " did not terminate!")
+      }
+    }
   }
 }
