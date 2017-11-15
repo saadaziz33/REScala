@@ -5,8 +5,8 @@ import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
 import java.util.function.BiConsumer
 
 import rescala.core._
-import rescala.fullmv.NotificationResultAction.{GlitchFreeReady, NotificationOutAndSuccessorOperation}
-import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.NoSuccessor
+import rescala.fullmv.NotificationResultAction.{GlitchFreeReady, NotGlitchFreeReady, NotificationOutAndSuccessorOperation}
+import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{NextReevaluation, NoSuccessor}
 import rescala.fullmv.mirrors.FullMVTurnProxy
 import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation}
 
@@ -93,6 +93,11 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     (phase, selfNode)
   }
 
+  def acquirePhaseLockAndGetPhase(): TurnPhase.Type = {
+    phaseLock.lock()
+    phase
+  }
+
   def addPredecessor(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
     @inline def predecessor = predecessorSpanningTree.txn
     assert(!isTransitivePredecessor(predecessor), s"attempted to establish already existing predecessor relation $predecessor -> $this")
@@ -165,12 +170,21 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     // reevaluation (if one is required) to have been completed, but cannot access values from subsequent turns
     // and hence does not need to wait for those.
     val ignitionNotification = Notification(this, reactive, changed = ignitionRequiresReevaluation)
-    val notificationResult = ignitionNotification.deliverNotification()
-    assert(!notificationResult.isInstanceOf[NotificationOutAndSuccessorOperation[_, _]], s"$this ignite $reactive spawned something other than a reevaluation: $notificationResult")
-    if(notificationResult == GlitchFreeReady) {
-      Reevaluation(this, reactive).compute()
-    } else {
-      if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive did not spawn reevaluation.")
+    ignitionNotification.deliverNotification() match {
+      case NotGlitchFreeReady =>
+        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive did not spawn reevaluation.")
+      // ignore
+      case GlitchFreeReady =>
+        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive spawned reevaluation.")
+        Reevaluation(this, reactive).compute()
+      case NextReevaluation(out, succTxn) if out.isEmpty =>
+        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive spawned reevaluation for successor $succTxn.")
+        succTxn.taskQueue.offer(Reevaluation(succTxn, reactive))
+        succTxn.notify()
+      case otherOut: NotificationOutAndSuccessorOperation[FullMVTurn, Reactive[FullMVStruct]] if otherOut.out.isEmpty =>
+        // ignore
+      case other =>
+        throw new AssertionError(s"$this ignite $reactive: unexpected result: $other")
     }
   }
 
