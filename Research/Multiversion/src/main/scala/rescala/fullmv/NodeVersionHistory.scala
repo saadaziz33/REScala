@@ -5,6 +5,7 @@ import java.util.concurrent.ForkJoinPool.ManagedBlocker
 import java.util.concurrent.locks.Lock
 
 import rescala.core.ValuePersistency
+import rescala.fullmv.NodeVersionHistory._
 
 import scala.annotation.elidable.ASSERTION
 import scala.annotation.{elidable, tailrec}
@@ -267,18 +268,19 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @return the position (positive values) or insertion point (negative values)
     */
   private def getFramePositionFraming(txn: T, minPos: Int = DEFAULT_MIN_POS): (Int, Int) = {
+    assert(minPos == DEFAULT_MIN_POS || minPos > math.max(latestGChint, latestReevOut), s"nonsensical minpos $minPos <= max(latestGChint $latestGChint, latestReevOut $latestReevOut)")
     val knownOrderedMinPosIsProvided = minPos != DEFAULT_MIN_POS
     val fromFinal = if (knownOrderedMinPosIsProvided) minPos else math.max(latestGChint, latestReevOut) + 1
     if(fromFinal == size) {
       ensureFromFinalRelationIsRecorded(size, txn, UnlockedUnknown).unlockedIfLocked()
-      val gcd = arrangeVersionArray(size, -1)
+      val gcd = arrangeVersionArray(size)
       val pos = size
       createVersionInHole(pos, txn)
       (pos, gcd)
     } else {
       val (insertOrFound, _) = findOrPigeonHoleFramingPredictive(txn, fromFinal, knownOrderedMinPosIsProvided, UnlockedUnknown)
       if(insertOrFound < 0) {
-        val gcd = arrangeVersionArray(-insertOrFound, -1)
+        val gcd = arrangeVersionArray(-insertOrFound)
         val pos = -insertOrFound - gcd
         createVersionInHole(pos, txn)
         (pos, gcd)
@@ -288,18 +290,22 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     }
   }
 
-  private def getFramePositionPropagating(txn: T, minPos: Int = DEFAULT_MIN_POS): (Int, Int) = {
-    val knownOrderedMinPosIsProvided = minPos != DEFAULT_MIN_POS
-    val fromFinal = if(knownOrderedMinPosIsProvided) minPos else math.max(latestGChint, latestReevOut) + 1
-    if(fromFinal == size) {
-      val gcd = arrangeVersionArray(size, -1)
-      val pos = size
+  private def getFramePositionPropagating(txn: T, minPos: Int = firstFrame): (Int, Int) = {
+    assert(minPos >= firstFrame, s"nonsensical minpos $minPos < firstFrame $firstFrame")
+    assert(firstFrame < size, s"a propagating turn may not have a version when looking for a frame, but there must be *some* frame.")
+    if(minPos == size) {
+      val gcd = arrangeVersionArray(minPos)
+      val pos = minPos - gcd
       createVersionInHole(pos, txn)
       (pos, gcd)
+    } else if (_versions(minPos).txn == txn) {
+      // common-case shortcut attempt: receive notification for firstFrame
+      (minPos, 0)
     } else {
-      val (insertOrFound, _) = findOrPigeonHolePropagatingPredictive(txn, fromFinal, knownOrderedMinPosIsProvided, fromFinal, size, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
-      if(insertOrFound < 0) {
-        val gcd = arrangeVersionArray(-insertOrFound, -1)
+      assert(txn.isTransitivePredecessor(_versions(if(minPos == firstFrame) firstFrame else minPos - 1).txn), s"either $txn at manually supplied minPos $minPos was not ordered properly, or it already has a frame here and is thus ordered behind the firstFrame $firstFrame, or it overtook its partial framing, in which case it is ordered against ${_versions(firstFrame).txn} on another node (i hope this is right) in $this")
+      val (insertOrFound, _) = findOrPigeonHolePropagatingPredictive(txn, minPos, fromFinalPredecessorRelationIsRecorded = true, minPos, size, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
+      if (insertOrFound < 0) {
+        val gcd = arrangeVersionArray(-insertOrFound)
         val pos = -insertOrFound - gcd
         createVersionInHole(pos, txn)
         (pos, gcd)
@@ -315,11 +321,11 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     if (predToRecord.phase == TurnPhase.Completed){
       sccState
     } else if(txn.isTransitivePredecessor(predToRecord)) {
+      // TODO this case is redundant if ensureRelationIsRecorded eventually does tryLock/check spinning
       sccState.known
     } else {
-      val lock = DecentralizedSGT.acquireLock(predToRecord, txn, sccState)
-      if (!txn.isTransitivePredecessor(predToRecord)) txn.addPredecessor(predToRecord.selfNode)
-      lock.unlock()
+      val lock = ensureRelationIsRecorded(predToRecord, txn, predToRecord, txn, sccState)
+      lock.unlockedIfLocked()
     }
   }
 
@@ -458,7 +464,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     assert(DecentralizedSGT.getOrder(_versions(fromFinal - 1).txn, lookFor) != SecondFirstSameSCC, s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
     assert(fromFinal > 0, s"binary search started with non-positive lower bound $fromFinal")
 
-    val r@(posOrInsert, connectivity) = findOrPigeonHoleFramingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, math.max(fromFinal, size - 1), size: Int, sccState: SCCConnectivity)
+    val r@(posOrInsert, _) = findOrPigeonHoleFramingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, math.max(fromFinal, size - 1), size: Int, sccState: SCCConnectivity)
 
     assert(_versions(latestGChint).txn.phase == TurnPhase.Completed, s"binary search returned $posOrInsert for $lookFor with GC hint $latestGChint pointing to a non-completed transaction in $this")
     assert(latestGChint < math.abs(posOrInsert), s"binary search returned $posOrInsert for $lookFor inside garbage collected section (< $latestGChint) in $this")
@@ -476,13 +482,13 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   @tailrec
   private def findOrPigeonHoleFramingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toFinal: Int, sccState: SCCConnectivity): (Int, SCCConnectivity) = {
     if(fromSpeculative == toFinal) {
-      val (fromOrderedSuccessfully, changedSCCState) = tryOrderFrom(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, sccState)
+      val (fromOrderedSuccessfully, changedSCCState) = tryOrderFromFraming(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, sccState)
       val unlocked = changedSCCState.unlockedIfLocked()
-      if(fromOrderedSuccessfully) {
+      if(fromOrderedSuccessfully == Succeeded) {
         (-fromSpeculative, UnlockedSameSCC)
       } else {
         assert(unlocked == UnlockedSameSCC, s"establishing from relationship failed, but $lookFor is supposedly not in same SCC")
-        findOrPigeonHoleFramingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromFinal, fromSpeculative, UnlockedSameSCC)
+        findOrPigeonHoleFramingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromFinal - 1, fromSpeculative, UnlockedSameSCC)
       }
     } else {
       val probe = fromSpeculative+(toFinal-fromSpeculative-1)/2
@@ -519,7 +525,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     assert(DecentralizedSGT.getOrder(_versions(fromFinal - 1).txn, lookFor) != SecondFirstSameSCC, s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
     assert(fromFinal > 0, s"binary search started with non-positive lower bound $fromFinal")
 
-    val r@(posOrInsert, connectivity) = findOrPigeonHolePropagatingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCConnectivity)
+    val r@(posOrInsert, _) = findOrPigeonHolePropagatingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCConnectivity)
 
     assert(_versions(latestGChint).txn.phase == TurnPhase.Completed, s"binary search returned $posOrInsert for $lookFor with GC hint $latestGChint pointing to a non-completed transaction in $this")
     assert(latestGChint < math.abs(posOrInsert), s"binary search returned $posOrInsert for $lookFor inside garbage collected section (< $latestGChint) in $this")
@@ -536,20 +542,36 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   @tailrec
   private def findOrPigeonHolePropagatingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCConnectivity): (Int, SCCConnectivity) = {
     if(fromSpeculative == toSpeculative) {
-      val (fromOrderedSuccessfully, changedSCCState) = tryOrderFrom(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, sccState)
-      if(fromOrderedSuccessfully) {
-        assert(changedSCCState != UnlockedUnknown, s"$lookFor is supposedly not in same SCC after having been ordered for insert at $fromSpeculative in $this")
-        val (orderedToResult, againChangedSCCState) = tryOrderTo(lookFor, toSpeculative, toFinal, toFinalRelationIsRecorded, changedSCCState)
-        val unlocked = againChangedSCCState.unlockedIfLocked()
-        if(orderedToResult == Succeeded) {
-          (-fromSpeculative, unlocked.known)
-        } else {
-          findOrPigeonHolePropagatingPredictive0(lookFor, toSpeculative, orderedToResult == FailedRecorded, toSpeculative, toFinal, toFinal, toFinalRelationIsRecorded, unlocked)
-        }
-      } else {
-        val unlocked = changedSCCState.unlockedIfLocked()
-        assert(unlocked == UnlockedSameSCC, s"establishing from relationship failed, but $lookFor is supposedly not in same SCC")
-        findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromFinal, fromSpeculative, fromSpeculative, toFinalRelationIsRecorded = true, UnlockedSameSCC)
+      val (fromOrderedResult, asdasd) = tryOrderFromPropagating(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, sccState)
+      val changedSCCState = asdasd.unlockedIfLocked() // TODO this may not be needed once the old binary search is gone
+      fromOrderedResult match {
+        case Succeeded =>
+          val (toOrderedSuccessfully, againChangedSCCState) = tryOrderToPropagating(lookFor, toSpeculative, toFinal, toFinalRelationIsRecorded, changedSCCState)
+          val unlocked = againChangedSCCState.unlockedIfLocked()
+          if(toOrderedSuccessfully == Succeeded) {
+            (-fromSpeculative, unlocked.known)
+          } else {
+            findOrPigeonHolePropagatingPredictive0(lookFor, toSpeculative, fromFinalPredecessorRelationIsRecorded = true, toSpeculative, toFinal, toFinal, toFinalRelationIsRecorded, unlocked)
+          }
+        case FailedFinalAndRecorded =>
+          val unlocked = changedSCCState.unlockedIfLocked()
+          findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromFinal, fromSpeculative - 1, fromSpeculative - 1, toFinalRelationIsRecorded = true, unlocked)
+        case FailedNonfinal =>
+          // This case is a bit of a weird one. The following events occurred:
+          // an operation such as notifyFollowFrame(X, lookFor) was executed.
+          // It searched for the position of lookFor, which at that time was Framing.
+          // It encountered a version of Y, which was also framing, and took it as lower bound.
+          // Concurrently, Z transitioned to Executing
+          // Then, the current termination attempt occurred.
+          // It attempted to record Y < lookFor, but that failed because Y is still Framing, but lookFor now Executing and thus must go earlier.
+          // Now we are here.
+          // Now because lookFor must go before Y, we use the position of Y as the new exclusive upper bound for the fallback search.
+          // In the future, though, Y may also transition to Executing.
+          // Once that happened, a different Task also involving lookFor may concurrently establish the originally attempted order of Y < lookFor.
+          // Thus, we must keep the previous toFinal bound, and can use Y only for speculation.
+          // (Lastly, for concerned readers, this loop terminates because when the fallback search itself then fails, it uses Y as new _final_ lower Bound, so the final range is guaranteed to shrink before repeating.)
+          val unlocked = changedSCCState.unlockedIfLocked()
+          findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromFinal, fromSpeculative - 1, toFinal, toFinalRelationIsRecorded, unlocked)
       }
     } else {
       val probe = fromSpeculative+(toSpeculative-fromSpeculative-1)/2
@@ -561,101 +583,111 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
           case TurnPhase.Completed =>
             latestGChint = probe
             findOrPigeonHolePropagatingPredictive0(lookFor, probe + 1, fromFinalPredecessorRelationIsRecorded = true, probe + 1, toSpeculative, toFinal, toFinalRelationIsRecorded, sccState)
-          case TurnPhase.Executing =>
+          case otherwise =>
             if (lookFor.isTransitivePredecessor(candidate)) {
               findOrPigeonHolePropagatingPredictive0(lookFor, probe + 1, fromFinalPredecessorRelationIsRecorded = true, probe + 1, toSpeculative, toFinal, toFinalRelationIsRecorded, sccState.known)
             } else if (candidate.isTransitivePredecessor(lookFor)) {
               findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, probe, probe, toFinalRelationIsRecorded = true, sccState.known)
-            } else {
+            } else if(lookFor.phase <= otherwise) {
               findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, probe + 1, toSpeculative, toFinal, toFinalRelationIsRecorded, sccState)
-            }
-          case TurnPhase.Framing =>
-            // cannot make this assertion because candidate may have transitioned to executing phase and established this relation while you were reading this comment
-            //assert(!candidate.isTransitivePredecessor(lookFor), s"framing $lookFor should not be predecessor of some executing $candidate")
-            if (lookFor.isTransitivePredecessor(candidate)) {
-              findOrPigeonHolePropagatingPredictive0(lookFor, probe + 1, fromFinalPredecessorRelationIsRecorded = true, probe + 1, toSpeculative, toFinal, toFinalRelationIsRecorded, sccState.known)
-            } else if (candidate.isTransitivePredecessor(lookFor)) {
-              findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, probe, probe, toFinalRelationIsRecorded = true, sccState.known)
             } else {
               findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, probe, toFinal, toFinalRelationIsRecorded, sccState)
             }
-          case unknown =>
-            throw new AssertionError(s"$candidate has unknown phase $unknown")
         }
       }
     }
   }
 
-  private def tryOrderFrom(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, sccState: SCCState) = {
+  // there is no tryOrderToFraming because framing turns always try to order themselves at the end
+  private def tryOrderFromFraming(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, sccState: SCCState): (TryRecordResult, SCCState) = {
     if (fromSpeculative > fromFinal) {
       val predToRecord = _versions(fromSpeculative - 1).txn
       if (predToRecord.phase == TurnPhase.Completed) {
         // last chance to skip recording effort if predecessor completed concurrently
-        (true, sccState)
+        (Succeeded, sccState)
       } else {
-        val lock = DecentralizedSGT.acquireLock(predToRecord, lookFor, sccState)
-        if (predToRecord.isTransitivePredecessor(lookFor)) {
-          // reverse order with from was recorded concurrently, fall back to (final, x) range
-          (false, lock)
-        } else {
-          // establish order with from if it wasn't already by a concurrent thread
-          if (!lookFor.isTransitivePredecessor(predToRecord)) lookFor.addPredecessor(predToRecord.selfNode)
-          (true, lock)
-        }
+        tryRecordRelationship(predToRecord, lookFor, predToRecord, lookFor, sccState)
       }
     } else if (!fromFinalPredecessorRelationIsRecorded) {
-      assert(fromFinal == fromSpeculative, s"someone speculated $fromSpeculative as a smaller from than fromFinal=$fromFinal")
-      (true, ensureFromFinalRelationIsRecorded(fromFinal, lookFor, sccState))
+      assert(fromFinal == fromSpeculative, s"someone speculated fromSpeculative=$fromSpeculative smaller than fromFinal=$fromFinal")
+      (Succeeded, ensureFromFinalRelationIsRecorded(fromFinal, lookFor, sccState))
     } else {
       // there is no from to order
-      (true, sccState)
+      (Succeeded, sccState)
     }
   }
 
-  sealed trait TryOrderToResult
-  case object Succeeded extends TryOrderToResult
-  case object FailedRecorded extends TryOrderToResult
-  case object FailedUnrecorded extends TryOrderToResult
-
-  private def tryOrderTo(lookFor: T, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCState): (TryOrderToResult, SCCState) = {
-    if (toSpeculative < toFinal) {
-      val succToRecord = _versions(toSpeculative).txn
-      val phase = succToRecord.acquirePhaseLockAndGetPhase()
-      try {
-        phase match {
-          case TurnPhase.Completed =>
-            (FailedRecorded, sccState)
-          case TurnPhase.Executing =>
-            if(lookFor.phase == TurnPhase.Framing) {
-              (FailedUnrecorded, sccState)
-            } else {
-              assert(lookFor.phase == TurnPhase.Executing, s"unexpected phase on $lookFor")
-              val lock = DecentralizedSGT.acquireLock(succToRecord, lookFor, sccState)
-              if (lookFor.isTransitivePredecessor(succToRecord)) {
-                (FailedRecorded, lock)
-              } else {
-                if(!succToRecord.isTransitivePredecessor(lookFor)) succToRecord.addPredecessor(lookFor.selfNode)
-                (Succeeded, lock)
+  private def tryOrderFromPropagating(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, sccState: SCCState): (TryOrderResult, SCCState) = {
+    if (fromSpeculative > fromFinal) {
+      val predToRecord = _versions(fromSpeculative - 1).txn
+      predToRecord.phase match {
+        case TurnPhase.Completed =>
+          // last chance to skip recording effort if predecessor completed concurrently
+          (Succeeded, sccState)
+        case TurnPhase.Executing =>
+          tryRecordRelationship(predToRecord, lookFor, predToRecord, lookFor, sccState)
+        case TurnPhase.Framing =>
+          lookFor.acquirePhaseLockIfAtMost(TurnPhase.Framing) match {
+            case TurnPhase.Framing =>
+              try {
+                tryRecordRelationship(predToRecord, lookFor, predToRecord, lookFor, sccState)
+              } finally {
+                lookFor.asyncReleasePhaseLock()
               }
-            }
-          case TurnPhase.Framing =>
-            val lock = DecentralizedSGT.acquireLock(succToRecord, lookFor, sccState)
-            if (lookFor.isTransitivePredecessor(succToRecord)) {
-              (FailedRecorded, lock)
-            } else {
-              if(!succToRecord.isTransitivePredecessor(lookFor)) succToRecord.addPredecessor(lookFor.selfNode)
-              (Succeeded, lock)
-            }
-        }
-      } finally {
-        succToRecord.asyncReleasePhaseLock()
+            case TurnPhase.Executing =>
+              // race conflict: lookFor was Framing earlier and ordered itself behind predToRecord, but lookFor
+              (FailedNonfinal, sccState)
+            case TurnPhase.Completed => throw new AssertionError(s"lookFor should not be able to complete concurrently")
+            case unknown => throw new AssertionError(s"$lookFor unknown phase $unknown")
+          }
+        case unknown => throw new AssertionError(s"$predToRecord unknown phase $unknown")
+      }
+    } else if (!fromFinalPredecessorRelationIsRecorded) {
+      assert(fromFinal == fromSpeculative, s"someone speculated fromSpeculative=$fromSpeculative smaller than fromFinal=$fromFinal")
+      (Succeeded, ensureFromFinalRelationIsRecorded(fromFinal, lookFor, sccState))
+    } else {
+      // there is no from to order
+      (Succeeded, sccState)
+    }
+  }
+
+  private def tryOrderToPropagating(lookFor: T, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCState): (TryRecordResult, SCCState) = {
+    if (toSpeculative < toFinal) {
+      assert(lookFor.phase == TurnPhase.Executing, s"$lookFor has a speculative successor, which should not happen while it's still framing.")
+      val succToRecord = _versions(toSpeculative).txn
+      succToRecord.acquirePhaseLockIfAtMost(TurnPhase.Executing) match {
+        case TurnPhase.Completed =>
+          (Succeeded, sccState)
+        case TurnPhase.Executing =>
+          // could also acquirePhaseLockIfAtMost(TurnPhase.Framing) and default this case to (false, sccState), since
+          // succToRecord must have been framing to have been made toSpeculative earlier, but now clearly isn't anymore
+          // and thus the previous decision is no longer valid.
+          // this might in turn allow simplifications for turn phase switching as only the transition framing->executing
+          // may have new predecessors pushed before it concurrently, but once a turn is executing, only his own thread
+          // would be modifying its predecessors.
+          try {
+            tryRecordRelationship(lookFor, succToRecord, succToRecord, lookFor, sccState)
+          } finally {
+            succToRecord.asyncReleasePhaseLock()
+          }
+        case TurnPhase.Framing =>
+          try {
+            val lock = ensureRelationIsRecorded(lookFor, succToRecord, succToRecord, lookFor, sccState)
+            (Succeeded, lock)
+          } finally {
+            succToRecord.asyncReleasePhaseLock()
+          }
+        case unknown =>
+          succToRecord.asyncReleasePhaseLock()
+          throw new AssertionError(s"$succToRecord has unknown phase $unknown")
       }
     } else if (!toFinalRelationIsRecorded) {
-      val succToRecord = _versions(toSpeculative).txn
-      assert(succToRecord.phase <= lookFor.phase, s"$succToRecord reached later phase than $lookFor, which was assumed impossible")
-      assert(!lookFor.isTransitivePredecessor(succToRecord), s"$succToRecord was concurrently ordered before $lookFor although we assumed this to be impossible")
-      val lock = DecentralizedSGT.acquireLock(succToRecord, lookFor, sccState)
-      if (!succToRecord.isTransitivePredecessor(lookFor)) succToRecord.addPredecessor(lookFor.selfNode)
+      assert(toFinal == toSpeculative, s"someone speculated toSpeculative=$toSpeculative as larger than toFinal=$toFinal")
+      assert(lookFor.phase == TurnPhase.Executing, s"$lookFor should only have a final but unrecorded to-relation if does a static read, i.e., is executing.")
+      val succToRecord = _versions(toFinal).txn
+      // while this assertion held when toFinal was decided, it may no longer be valid here, e.g. for a follow framing, which may have switched to Executing since then
+      // assert(succToRecord.phase == TurnPhase.Framing, s"$succToRecord should only be a final but unrecorded to-relation that has framed a node, but not the static successor where $lookFor came from and thus not completed framing")
+      val lock = ensureRelationIsRecorded(lookFor, succToRecord, succToRecord, lookFor, sccState)
       (Succeeded, lock)
     } else {
       // there is no to to order
@@ -664,12 +696,20 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
 
-  private def getFramePositionPropagating(txn: T): (Int, Int) = {
-    if(firstFrame < size && _versions(firstFrame).txn == txn)
-      // common-case shortcut attempt: receive notification for firstFrame
-      (firstFrame, 0)
-    else
-      findOrPigeonHole(txn, firstFrame, size, versionRequired = true)
+  private def tryRecordRelationship(attemptPredecessor: T, succToRecord: T, defender: T, contender: T, sccState: SCCState): (TryRecordResult, SCCState) = {
+    val lock = DecentralizedSGT.acquireLock(defender, contender, sccState)
+    if (attemptPredecessor.isTransitivePredecessor(succToRecord)) {
+      (FailedFinalAndRecorded, lock)
+    } else {
+      if (!succToRecord.isTransitivePredecessor(attemptPredecessor)) succToRecord.addPredecessor(attemptPredecessor.selfNode)
+      (Succeeded, lock)
+    }
+  }
+
+  private def ensureRelationIsRecorded(predecessor: T, successor: T, defender: T, contender: T, sccState: SCCState): SCCState = {
+    val lock = DecentralizedSGT.acquireLock(defender, contender, sccState)
+    if (!successor.isTransitivePredecessor(predecessor)) successor.addPredecessor(predecessor.selfNode)
+    lock
   }
 
   /**
@@ -840,7 +880,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   override def notifyFollowFrame(txn: T, changed: Boolean, followFrame: T): NotificationResultAction[T, OutDep] = synchronized {
     val position = getFramePositionPropagating(txn)._1
 
-    val (followFramePos, gcd) = findOrPigeonHole(followFrame, position + 1, size, versionRequired = true)
+    val (followFramePos, gcd) = getFramePositionPropagating(followFrame, position + 1)
     _versions(followFramePos).pending += 1
 
     val result = notify0(position - gcd, txn, changed)
@@ -1303,4 +1343,10 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
 
 object NodeVersionHistory {
   val DEBUG_GC = false
+
+  sealed trait TryOrderResult
+  case object FailedNonfinal extends TryOrderResult
+  sealed trait TryRecordResult extends TryOrderResult
+  case object Succeeded extends TryRecordResult
+  case object FailedFinalAndRecorded extends TryRecordResult
 }

@@ -1,6 +1,6 @@
 package rescala.fullmv
 
-import java.util.concurrent.locks.{LockSupport, ReentrantLock}
+import java.util.concurrent.locks.{LockSupport, ReentrantReadWriteLock}
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
 import java.util.function.BiConsumer
 
@@ -17,7 +17,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   val taskQueue = new ConcurrentLinkedQueue[FullMVAction]()
   val waiters = new ConcurrentHashMap[Thread, TurnPhase.Type]()
 
-  val phaseLock = new ReentrantLock()
+  val phaseLock = new ReentrantReadWriteLock()
   @volatile var phase: TurnPhase.Type = TurnPhase.Initialized
 
   val successorsIncludingSelf: ArrayBuffer[FullMVTurn] = ArrayBuffer(this) // this is implicitly a set
@@ -42,13 +42,13 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
           turn.waiters.remove(this.userlandThread)
           awaitAndAtomicCasPhase()
         case None =>
-          phaseLock.lock()
+          phaseLock.writeLock().lock()
           val success = try {
             if (taskQueue.isEmpty && (predecessorSpanningTreeNodes eq compare)) {
               this.phase = newPhase
               waiters.forEach(new BiConsumer[Thread, TurnPhase.Type] {
                 override def accept(t: Thread, u: TurnPhase.Type) = if (u <= newPhase) {
-                  if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this phase switch unparking $t.")
+                  if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] ${FullMVTurn.this} phase switch unparking ${t.getName}.")
                   LockSupport.unpark(t)
                 }
               })
@@ -62,7 +62,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
               false
             }
           } finally {
-            phaseLock.unlock()
+            phaseLock.writeLock().unlock()
           }
           if(!success) awaitAndAtomicCasPhase()
       }
@@ -89,13 +89,20 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   override def acquirePhaseLockAndGetEstablishmentBundle(): (TurnPhase.Type, TransactionSpanningTreeNode[FullMVTurn]) = {
     // TODO think about how and where to try{}finally{unlock()} this..
-    phaseLock.lock()
+    phaseLock.readLock().lock()
     (phase, selfNode)
   }
 
-  def acquirePhaseLockAndGetPhase(): TurnPhase.Type = {
-    phaseLock.lock()
-    phase
+  def acquirePhaseLockIfAtMost(maxPhase: TurnPhase.Type): TurnPhase.Type = {
+    val pOptimistic = phase
+    if(pOptimistic > maxPhase) {
+      pOptimistic
+    } else {
+      phaseLock.readLock().lock()
+      val pSecure = phase
+      if (pSecure > maxPhase) phaseLock.readLock().unlock()
+      pSecure
+    }
   }
 
   def addPredecessor(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
@@ -107,7 +114,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   def addPredecessorAndReleasePhaseLock(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
     addPredecessor(predecessorSpanningTree)
-    phaseLock.unlock()
+    phaseLock.readLock().unlock()
   }
 
   override def maybeNewReachableSubtree(attachBelow: FullMVTurn, spanningSubTreeRoot: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
@@ -135,7 +142,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     successorsIncludingSelf += successor
   }
 
-  override def asyncReleasePhaseLock(): Unit = phaseLock.unlock()
+  override def asyncReleasePhaseLock(): Unit = phaseLock.readLock().unlock()
 
   //========================================================ToString============================================================
 
