@@ -215,51 +215,6 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   var latestReevOut: Int = 0
   var latestGChint: Int = 0
 
-  /**
-    * performs binary search for the given transaction in _versions. This establishes an order in sgt against all other
-    * versions' transactions, placing the given transaction as late as possible with respect to transaction's current
-    * phases. If asked, a new version is created at the found position. May expunge any number of obsolete versions.
-    * @param lookFor the transaction to look for
-    * @param from current from index of the search range
-    * @param to current to index (exclusive) of the search range
-    * @param versionRequired whether or not a version should be created, in case none exists for the given transaction
-    * @return a tuple consisting of: (a) the index of the version associated with the given transaction, or if no such
-    *         version exists and was not requested to be created, the negative index at which it would have to be
-    *         inserted (b) how many versions were expunged for garbage collection. Note that we assume no insertion to
-    *         ever occur at index 0 -- the the first version of any node is either from the transaction that created it
-    *         or from some completed transaction. In the former case, no preceding transaction should be aware of the
-    *         node's existence. In the latter case, there are no preceding transactions that still execute operations.
-    *         Thus insertion at index 0 should be impossible. A return value of 0 thus means "found at 0", rather than
-    *         "should insert at 0"
-    */
-  private def findOrPigeonHole(lookFor: T, from: Int, to: Int, versionRequired: Boolean): (Int, Int) = {
-    assert(from <= to, s"binary search started with backwards indices from $from to $to")
-    assert(to <= size, s"binary search upper bound $to beyond history size $size")
-    assert(to == size || Set[PartialOrderResult](SecondFirstSameSCC, UnorderedSCCUnknown).contains(DecentralizedSGT.getOrder(_versions(to).txn, lookFor)), s"to = $to successor for non-blocking search of known static $lookFor pointed to version of ${_versions(to).txn} which is ordered earlier.")
-    assert(DecentralizedSGT.getOrder(_versions(from - 1).txn, lookFor) != SecondFirstSameSCC, s"from - 1 = ${from - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(from - 1).txn} which is already ordered later.")
-    assert(from > 0, s"binary search started with non-positive lower bound $from")
-
-    val posOrInsert = findOrPigeonHoleNonblocking(lookFor, from, fromIsKnownPredecessor = false, to, knownSameSCC = false)
-
-    assert(_versions(latestGChint).txn.phase == TurnPhase.Completed, s"binary search returned $posOrInsert for $lookFor with GC hint $latestGChint pointing to a non-completed transaction in $this")
-    assert(latestGChint < math.abs(posOrInsert), s"binary search returned $posOrInsert for $lookFor inside garbage collected section (< $latestGChint) in $this")
-
-    assert(posOrInsert < size, s"binary search returned found at $posOrInsert for $lookFor, which is out of bounds in $this")
-    assert(posOrInsert < 0 || _versions(posOrInsert).txn == lookFor, s"binary search returned found at $posOrInsert for $lookFor, which is wrong in $this")
-    assert(posOrInsert >= 0 || -posOrInsert <= size, s"binary search returned insert at ${-posOrInsert}, which is out of bounds in $this")
-    assert(posOrInsert >= 0 || Set[PartialOrderResult](FirstFirstSameSCC, FirstFirstSCCUnkown).contains(DecentralizedSGT.getOrder(_versions(-posOrInsert - 1).txn, lookFor)), s"binary search returned insert at ${-posOrInsert} for $lookFor, but predecessor isn't ordered first in $this")
-    assert(posOrInsert >= 0 || -posOrInsert == to || DecentralizedSGT.getOrder(_versions(-posOrInsert).txn, lookFor) == SecondFirstSameSCC, s"binary search returned insert at ${-posOrInsert} for $lookFor, but it isn't ordered before successor in $this")
-
-    if(posOrInsert < 0 && versionRequired) {
-      val gcd = arrangeVersionArray(-posOrInsert)
-      val pos = -posOrInsert - gcd
-      createVersionInHole(pos, lookFor)
-      (pos, gcd)
-    } else {
-      (posOrInsert, 0)
-    }
-  }
-
   val DEFAULT_MIN_POS = 0
   /**
     * determine the position or insertion point for a framing transaction
@@ -437,76 +392,11 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       }
     }
   }
-  @tailrec
-  private def findOrPigeonHoleNonblocking(lookFor: T, from: Int, fromIsKnownPredecessor: Boolean, to: Int, knownSameSCC: Boolean): Int = {
-    if (to == from) {
-      if(!fromIsKnownPredecessor) {
-        val pred = _versions(from - 1).txn
-        val unblockedOrder = DecentralizedSGT.getOrder(pred, lookFor)
-        assert(unblockedOrder != SecondFirstSameSCC)
-        if(unblockedOrder == UnorderedSCCUnknown) {
-          val lock = DecentralizedSGT.acquireLock(pred, lookFor, if(knownSameSCC) UnlockedSameSCC else UnlockedUnknown)
-          try {
-            val establishedOrder = DecentralizedSGT.ensureOrder(pred, lookFor)
-            assert(establishedOrder == FirstFirst)
-          } finally {
-            lock.unlock()
-          }
-        }
-      }
-      -from
-    } else {
-      val idx = from+(to-from-1)/2
-      val candidate = _versions(idx).txn
-      if(candidate.phase == TurnPhase.Completed) latestGChint = idx
-      if(candidate == lookFor) {
-        idx
-      } else DecentralizedSGT.getOrder(candidate, lookFor) match {
-        case FirstFirstSCCUnkown =>
-          findOrPigeonHoleNonblocking(lookFor, idx + 1, fromIsKnownPredecessor = true, to, knownSameSCC)
-        case FirstFirstSameSCC =>
-          findOrPigeonHoleNonblocking(lookFor, idx + 1, fromIsKnownPredecessor = true, to, knownSameSCC = true)
-        case SecondFirstSameSCC =>
-          findOrPigeonHoleNonblocking(lookFor, from, fromIsKnownPredecessor, idx, knownSameSCC = true)
-        case UnorderedSCCUnknown =>
-          val lock = DecentralizedSGT.acquireLock(candidate, lookFor, if(knownSameSCC) UnlockedSameSCC else UnlockedUnknown)
-          try {
-            findOrPigeonHoleLocked(lookFor, from, fromIsKnownPredecessor, to)
-          } finally {
-            lock.unlock()
-          }
-      }
-    }
-  }
-
-  @tailrec
-  private def findOrPigeonHoleLocked(lookFor: T, from: Int, fromKnownOrdered: Boolean, to: Int): Int = {
-    if (to == from) {
-      if(!fromKnownOrdered) {
-        val pred = _versions(from - 1).txn
-        val establishedOrder = DecentralizedSGT.ensureOrder(pred, lookFor)
-        assert(establishedOrder == FirstFirst)
-      }
-      -from
-    } else {
-      val idx = from+(to-from-1)/2
-      val candidate = _versions(idx).txn
-      if(candidate.phase == TurnPhase.Completed) latestGChint = idx
-      if(candidate == lookFor) {
-        idx
-      } else DecentralizedSGT.ensureOrder(candidate, lookFor) match {
-        case FirstFirst =>
-          findOrPigeonHoleLocked(lookFor, idx + 1, fromKnownOrdered = true, to)
-        case SecondFirst =>
-          findOrPigeonHoleLocked(lookFor, from, fromKnownOrdered, idx)
-      }
-    }
-  }
 
   private def findOrPigeonHoleFramingPredictive(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, sccState: SCCConnectivity): (Int, SCCConnectivity) = {
     assert(fromFinal <= size, s"binary search started with backwards indices from $fromFinal to $size")
     assert(size <= size, s"binary search upper bound $size beyond history size $size")
-    assert(DecentralizedSGT.getOrder(_versions(fromFinal - 1).txn, lookFor) != SecondFirstSameSCC, s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
+    assert(!_versions(fromFinal - 1).txn.isTransitivePredecessor(lookFor), s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
     assert(fromFinal > 0, s"binary search started with non-positive lower bound $fromFinal")
 
     val r@(posOrInsert, _) = findOrPigeonHoleFramingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, math.max(fromFinal, size - 1), size: Int, sccState: SCCConnectivity)
@@ -566,8 +456,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   private def findOrPigeonHolePropagatingPredictive(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCConnectivity): (Int, SCCConnectivity) = {
     assert(fromFinal <= toFinal, s"binary search started with backwards indices from $fromFinal to $toFinal")
     assert(toFinal <= size, s"binary search upper bound $toFinal beyond history size $size")
-    assert(toFinal == size || Set[PartialOrderResult](SecondFirstSameSCC, UnorderedSCCUnknown).contains(DecentralizedSGT.getOrder(_versions(toFinal).txn, lookFor)), s"to = $toFinal successor for non-blocking search of known static $lookFor pointed to version of ${_versions(toFinal).txn} which is ordered earlier.")
-    assert(DecentralizedSGT.getOrder(_versions(fromFinal - 1).txn, lookFor) != SecondFirstSameSCC, s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
+    assert(toFinal == size || !(lookFor.isTransitivePredecessor(_versions(toFinal).txn) || _versions(toFinal).txn.phase == TurnPhase.Completed), s"to = $toFinal successor for non-blocking search of known static $lookFor pointed to version of ${_versions(toFinal).txn} which is ordered earlier.")
+    assert(!_versions(fromFinal - 1).txn.isTransitivePredecessor(lookFor), s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
     assert(fromFinal > 0, s"binary search started with non-positive lower bound $fromFinal")
 
     val r@(posOrInsert, _) = findOrPigeonHolePropagatingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCConnectivity)
@@ -578,8 +468,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     assert(posOrInsert < size, s"binary search returned found at $posOrInsert for $lookFor, which is out of bounds in $this")
     assert(posOrInsert < 0 || _versions(posOrInsert).txn == lookFor, s"binary search returned found at $posOrInsert for $lookFor, which is wrong in $this")
     assert(posOrInsert >= 0 || -posOrInsert <= size, s"binary search returned insert at ${-posOrInsert}, which is out of bounds in $this")
-    assert(posOrInsert >= 0 || Set[PartialOrderResult](FirstFirstSameSCC, FirstFirstSCCUnkown).contains(DecentralizedSGT.getOrder(_versions(-posOrInsert - 1).txn, lookFor)), s"binary search returned insert at ${-posOrInsert} for $lookFor, but predecessor isn't ordered first in $this")
-    assert(posOrInsert >= 0 || -posOrInsert == toFinal || DecentralizedSGT.getOrder(_versions(-posOrInsert).txn, lookFor) == SecondFirstSameSCC, s"binary search returned insert at ${-posOrInsert} for $lookFor, but it isn't ordered before successor in $this")
+    assert(posOrInsert >= 0 || lookFor.isTransitivePredecessor(_versions(-posOrInsert - 1).txn) || _versions(-posOrInsert - 1).txn.phase == TurnPhase.Completed, s"binary search returned insert at ${-posOrInsert} for $lookFor, but predecessor isn't ordered first in $this")
+    assert(posOrInsert >= 0 || -posOrInsert == toFinal || _versions(-posOrInsert).txn.isTransitivePredecessor(lookFor), s"binary search returned insert at ${-posOrInsert} for $lookFor, but it isn't ordered before successor in $this")
 
     r
   }
@@ -588,7 +478,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   private def findOrPigeonHolePropagatingPredictive0(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, fromSpeculative: Int, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCConnectivity): (Int, SCCConnectivity) = {
     if(fromSpeculative == toSpeculative) {
       val (fromOrderedResult, asdasd) = tryOrderFromPropagating(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromSpeculative, sccState)
-      val changedSCCState = asdasd.unlockedIfLocked() // TODO this may not be needed once the old binary search is gone
+      val changedSCCState = asdasd.unlockedIfLocked() // TODO i don't know why not unlocking here leads to deadlocks...
       fromOrderedResult match {
         case Succeeded =>
           val (toOrderedSuccessfully, againChangedSCCState) = tryOrderToPropagating(lookFor, toSpeculative, toFinal, toFinalRelationIsRecorded, changedSCCState)
@@ -764,15 +654,22 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param txn the transaction
     * @return the position (positive values) or insertion point (negative values)
     */
-  private def findFinalPosition/*Propagating*/(txn: T, versionRequired: Boolean): (Int, Int) = {
-    if(_versions(latestReevOut).txn == txn) {
+  private def findFinalPosition/*Propagating*/(txn: T): Int = {
+    if (_versions(latestReevOut).txn == txn) {
       // common-case shortcut attempt: read latest completed reevaluation
-      (latestReevOut, 0)
-    } else if(latestWritten != latestReevOut && _versions(latestWritten).txn == txn)
-      // common-case shortcut attempt: read latest changed reevaluation
-      (latestWritten, 0)
-    else
-      findOrPigeonHole(txn, latestGChint + 1, firstFrame, versionRequired)
+      latestReevOut
+    } else if (latestWritten != latestReevOut && _versions(latestWritten).txn == txn) {
+    // common-case shortcut attempt: read latest changed reevaluation
+      latestWritten
+    } else {
+      val res = findOrPigeonHolePropagatingPredictive(txn, latestGChint + 1, fromFinalPredecessorRelationIsRecorded = true, latestGChint, firstFrame, firstFrame, toFinalRelationIsRecorded = firstFrame == size, UnlockedSameSCC)._1
+      assert(res < 0 || _versions(res).isFinal, s"found version $res of $txn isn't final in $this")
+      assert(res < 0 || _versions(res).txn == txn, s"found version $res doesn't belong to $txn in $this")
+      assert(res >= 0 || _versions(-res - 1).isFinal, s"predecessor version of insert point $res of $txn isn't final in $this")
+      assert(res >= 0 || txn.isTransitivePredecessor(_versions(-res - 1).txn) || _versions(-res - 1).txn.phase == TurnPhase.Completed, s"predecessor of insert point ${-res} isn't ordered before $txn in $this")
+      assert(res >= 0 || -res == size || _versions(-res).txn.isTransitivePredecessor(txn), s"successor of insert point ${-res} isn't ordered after $txn in $this")
+      res
+    }
   }
 
 
@@ -1079,7 +976,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         ForkJoinPool.managedBlock(version.blockForStable)
 
         synchronized {
-          val stablePosition = if(version.isFrame) firstFrame else findFinalPosition(txn, versionRequired = true)._1
+          val stablePosition = if(version.isFrame) firstFrame else findFinalPosition(txn)
           assert(stablePosition >= 0, "somehow, the version allocated above disappeared..")
           beforeKnownStable(txn, stablePosition)
         }
@@ -1087,7 +984,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   override def staticBefore(txn: T): V = synchronized {
-    beforeKnownStable(txn, math.abs(findFinalPosition(txn, versionRequired = false)._1))
+    beforeKnownStable(txn, math.abs(findFinalPosition(txn)))
   }
 
   private def beforeKnownStable(txn: T, position: Int): V = synchronized {
@@ -1150,14 +1047,14 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
           version.value.get
         } else {
           synchronized {
-            beforeOrInitKnownFinal(txn, findFinalPosition(txn, versionRequired = true)._1)
+            beforeOrInitKnownFinal(txn, findFinalPosition(txn))
           }
         }
     }
   }
 
   override def staticAfter(txn: T): V = synchronized {
-    val position = findFinalPosition(txn, versionRequired = false)._1
+    val position = findFinalPosition(txn)
     if(position < 0) {
       beforeOrInitKnownFinal(txn, -position)
     } else {

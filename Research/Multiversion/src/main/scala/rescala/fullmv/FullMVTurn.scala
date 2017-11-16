@@ -1,7 +1,7 @@
 package rescala.fullmv
 
 import java.util.concurrent.locks.{LockSupport, ReentrantReadWriteLock}
-import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ThreadLocalRandom}
 import java.util.function.BiConsumer
 
 import rescala.core._
@@ -16,6 +16,9 @@ import scala.collection.mutable.ArrayBuffer
 class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
   val taskQueue = new ConcurrentLinkedQueue[FullMVAction]()
   val waiters = new ConcurrentHashMap[Thread, TurnPhase.Type]()
+
+  val hc = ThreadLocalRandom.current().nextInt()
+  override def hashCode(): Int = hc
 
   val phaseLock = new ReentrantReadWriteLock()
   @volatile var phase: TurnPhase.Type = TurnPhase.Initialized

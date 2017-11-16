@@ -26,9 +26,9 @@ class NodeVersionHistoryTest extends FunSuite {
     framing1.awaitAndSwitchPhase(TurnPhase.Framing)
     val framing2 = engine.newTurn()
     framing2.awaitAndSwitchPhase(TurnPhase.Framing)
-    assert(DecentralizedSGT.synchronized{
-      DecentralizedSGT.ensureOrder(framing1, framing2)
-    } === FirstFirst)
+    val lock = DecentralizedSGT.acquireLock(framing1, framing2, UnlockedUnknown)
+    framing2.addPredecessor(framing1.selfNode)
+    lock.unlock()
 
     assert(n.incrementFrame(framing2) === FramingBranchEnd) // End because earlier frame by reevaluate turn exists
 
