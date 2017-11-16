@@ -290,31 +290,6 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     }
   }
 
-  private def getFramePositionPropagating(txn: T, minPos: Int = firstFrame): (Int, Int) = {
-    assert(minPos >= firstFrame, s"nonsensical minpos $minPos < firstFrame $firstFrame")
-    assert(firstFrame < size, s"a propagating turn may not have a version when looking for a frame, but there must be *some* frame.")
-    if(minPos == size) {
-      val gcd = arrangeVersionArray(minPos)
-      val pos = minPos - gcd
-      createVersionInHole(pos, txn)
-      (pos, gcd)
-    } else if (_versions(minPos).txn == txn) {
-      // common-case shortcut attempt: receive notification for firstFrame
-      (minPos, 0)
-    } else {
-      assert(txn.isTransitivePredecessor(_versions(if(minPos == firstFrame) firstFrame else minPos - 1).txn), s"either $txn at manually supplied minPos $minPos was not ordered properly, or it already has a frame here and is thus ordered behind the firstFrame $firstFrame, or it overtook its partial framing, in which case it is ordered against ${_versions(firstFrame).txn} on another node (i hope this is right) in $this")
-      val (insertOrFound, _) = findOrPigeonHolePropagatingPredictive(txn, minPos, fromFinalPredecessorRelationIsRecorded = true, minPos, size, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
-      if (insertOrFound < 0) {
-        val gcd = arrangeVersionArray(-insertOrFound)
-        val pos = -insertOrFound - gcd
-        createVersionInHole(pos, txn)
-        (pos, gcd)
-      } else {
-        (insertOrFound, 0)
-      }
-    }
-  }
-
   private def ensureFromFinalRelationIsRecorded(fromFinal: Int, txn: T, sccState: SCCState): SCCState = {
     val predToRecord = _versions(fromFinal - 1).txn
     assert(!predToRecord.isTransitivePredecessor(txn), s"$predToRecord was concurrently ordered after $txn although we assumed this to be impossible")
@@ -340,6 +315,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     assert(pTwo + 1 == size || _versions(pTwo + 1).txn.isTransitivePredecessor(two), s"second $two isn't ordered before its successor ${_versions(pTwo + 1).txn}")
     res
   }
+
   private def getFramePositionsFraming0(one: T, two: T): (Int, Int) = {
     val fromFinal = math.max(latestGChint, latestReevOut) + 1
     if(fromFinal == size) {
@@ -372,7 +348,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
           createVersionInHole(second, two)
           (first, second)
         } else {
-          val (insertOrFoundTwo, _) = findOrPigeonHoleFramingPredictive(two, insertOne, fromFinalPredecessorRelationIsRecorded = false, sccState)
+          val (insertOrFoundTwo, _) = findOrPigeonHoleFramingPredictive(two, insertOne, fromFinalPredecessorRelationIsRecorded = true, sccState)
           if (insertOrFoundTwo >= 0) {
             val gcd = arrangeVersionArray(insertOne)
             val first = insertOne - gcd
@@ -392,6 +368,75 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     }
   }
 
+  private def getFramePositionPropagating(txn: T, minPos: Int = firstFrame): (Int, Int) = {
+    assert(minPos >= firstFrame, s"nonsensical minpos $minPos < firstFrame $firstFrame")
+    assert(firstFrame < size, s"a propagating turn may not have a version when looking for a frame, but there must be *some* frame.")
+    if(minPos == size) {
+      assert(txn.isTransitivePredecessor(_versions(minPos - 1).txn), s"knownOrderedMinPos $minPos for $txn: predecessor ${_versions(minPos - 1).txn} not ordered")
+      val gcd = arrangeVersionArray(minPos)
+      val pos = minPos - gcd
+      createVersionInHole(pos, txn)
+      (pos, gcd)
+    } else if (_versions(minPos).txn == txn) {
+      // common-case shortcut attempt: receive notification for firstFrame
+      (minPos, 0)
+    } else {
+      assert(txn.isTransitivePredecessor(_versions(if(minPos == firstFrame) firstFrame else minPos - 1).txn), s"either $txn at manually supplied knownOrderedMinPos $minPos was not ordered properly, or it already has a frame here and is thus ordered behind the firstFrame $firstFrame, or it overtook its partial framing, in which case it is ordered against ${_versions(firstFrame).txn} on another node (i hope this is right) in $this")
+      val (insertOrFound, _) = findOrPigeonHolePropagatingPredictive(txn, minPos, fromFinalPredecessorRelationIsRecorded = true, minPos, size, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
+      if (insertOrFound < 0) {
+        val gcd = arrangeVersionArray(-insertOrFound)
+        val pos = -insertOrFound - gcd
+        createVersionInHole(pos, txn)
+        (pos, gcd)
+      } else {
+        (insertOrFound, 0)
+      }
+    }
+  }
+
+  private def getFramePositionsPropagating(one: T, two: T): (Int, Int) = {
+    assert(firstFrame < size, s"a propagating turn may not have a version when looking for a frame, but there must be *some* frame.")
+    if (_versions(firstFrame).txn == one) {
+      // common-case shortcut attempt: receive notification for firstFrame
+      val foundOne = firstFrame
+      val (insertOrFoundTwo, gcd) = getFramePositionPropagating(two, firstFrame + 1)
+      (foundOne - gcd, insertOrFoundTwo)
+    } else {
+      val (insertOrFoundOne, sccState) = findOrPigeonHolePropagatingPredictive(one, firstFrame, fromFinalPredecessorRelationIsRecorded = false, firstFrame, size, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
+      if(insertOrFoundOne >= 0) {
+        // first one found: defer to just look for the second alone
+        val (insertOrFoundTwo, gcd) = getFramePositionPropagating(two, insertOrFoundOne + 1)
+        (insertOrFoundOne - gcd, insertOrFoundTwo)
+      } else {
+        // first one not found:
+        val insertOne = -insertOrFoundOne
+        if (insertOne == size) {
+          val gcd = arrangeVersionArray(insertOne, size)
+          val first = insertOne - gcd
+          createVersionInHole(first, one)
+          val second = size
+          createVersionInHole(second, two)
+          (first, second)
+        } else {
+          val (insertOrFoundTwo, _) = findOrPigeonHolePropagatingPredictive(two, insertOne, fromFinalPredecessorRelationIsRecorded = true, insertOne, size, size, toFinalRelationIsRecorded = true, sccState)
+          if (insertOrFoundTwo >= 0) {
+            val gcd = arrangeVersionArray(insertOne)
+            val first = insertOne - gcd
+            createVersionInHole(first, one)
+            (first, insertOrFoundTwo - gcd + 1)
+          } else {
+            val insertTwo = -insertOrFoundTwo
+            val gcd = arrangeVersionArray(insertOne, insertTwo)
+            val first = insertOne - gcd
+            val second = insertTwo - gcd + 1
+            createVersionInHole(first, one)
+            createVersionInHole(second, two)
+            (first, second)
+          }
+        }
+      }
+    }
+  }
   @tailrec
   private def findOrPigeonHoleNonblocking(lookFor: T, from: Int, fromIsKnownPredecessor: Boolean, to: Int, knownSameSCC: Boolean): Int = {
     if (to == from) {
@@ -878,12 +923,11 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param followFrame a transaction for which to create a subsequent frame, furthering its partial framing.
     */
   override def notifyFollowFrame(txn: T, changed: Boolean, followFrame: T): NotificationResultAction[T, OutDep] = synchronized {
-    val position = getFramePositionPropagating(txn)._1
+    val (pos, followPos) = getFramePositionsPropagating(txn, followFrame)
 
-    val (followFramePos, gcd) = getFramePositionPropagating(followFrame, position + 1)
-    _versions(followFramePos).pending += 1
+    _versions(followPos).pending += 1
 
-    val result = notify0(position - gcd, txn, changed)
+    val result = notify0(pos, txn, changed)
     assertOptimizationsIntegrity(s"notifyFollowFrame($txn, $changed, $followFrame) -> $result")
     result
   }
@@ -984,8 +1028,30 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param txn the executing transaction
     * @return the version's position.
     */
-  private def ensureReadVersion(txn: T, knownMinPos: Int = 1): (Int, Int) = {
-    findOrPigeonHole(txn, knownMinPos, size, versionRequired = true)
+  private def ensureReadVersion(txn: T, knownOrderedMinPos: Int = latestGChint + 1): (Int, Int) = {
+    assert(knownOrderedMinPos > latestGChint, s"nonsensical minpos $knownOrderedMinPos <= latestGChint $latestGChint")
+    if(knownOrderedMinPos == size) {
+      assert(txn.isTransitivePredecessor(_versions(knownOrderedMinPos - 1).txn) || _versions(knownOrderedMinPos - 1).txn.phase == TurnPhase.Completed, s"illegal $knownOrderedMinPos: predecessor ${_versions(knownOrderedMinPos - 1).txn} not ordered in $this")
+      val gcd = arrangeVersionArray(size)
+      val pos = size
+      createVersionInHole(pos, txn)
+      (pos, gcd)
+    } else if (_versions(latestReevOut).txn == txn) {
+      (latestReevOut, 0)
+    } else if (_versions(latestWritten).txn == txn) {
+      (latestWritten, 0)
+    } else {
+      val (insertOrFound, _) = findOrPigeonHolePropagatingPredictive(txn, knownOrderedMinPos, fromFinalPredecessorRelationIsRecorded = true, knownOrderedMinPos, size, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
+      if(insertOrFound < 0) {
+        val gcd = arrangeVersionArray(-insertOrFound)
+        val pos = -insertOrFound - gcd
+        createVersionInHole(pos, txn)
+        (pos, gcd)
+      } else {
+        (insertOrFound, 0)
+      }
+    }
+//    findOrPigeonHole(txn, knownOrderedMinPos, size, versionRequired = true)
   }
 
   /**
