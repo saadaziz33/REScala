@@ -109,6 +109,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   }
 
   def addPredecessor(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+    assert(DecentralizedSGT.lock.isHeldByCurrentThread, s"addPredecessor by thread that doesn't hold the SGT lock")
     @inline def predecessor = predecessorSpanningTree.txn
     assert(!isTransitivePredecessor(predecessor), s"attempted to establish already existing predecessor relation $predecessor -> $this")
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new predecessor $predecessor.")
