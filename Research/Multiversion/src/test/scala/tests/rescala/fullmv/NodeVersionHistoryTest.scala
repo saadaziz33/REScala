@@ -26,7 +26,7 @@ class NodeVersionHistoryTest extends FunSuite {
     framing1.awaitAndSwitchPhase(TurnPhase.Framing)
     val framing2 = engine.newTurn()
     framing2.awaitAndSwitchPhase(TurnPhase.Framing)
-    val lock = DecentralizedSGT.acquireLock(framing1, framing2, UnlockedUnknown)
+    val lock = SerializationGraphTracking.acquireLock(framing1, framing2, UnlockedUnknown)
     framing2.addPredecessor(framing1.selfNode)
     lock.unlock()
 

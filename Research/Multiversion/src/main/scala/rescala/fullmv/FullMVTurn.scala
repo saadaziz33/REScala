@@ -7,24 +7,23 @@ import java.util.function.BiConsumer
 import rescala.core._
 import rescala.fullmv.NotificationResultAction.{GlitchFreeReady, NotGlitchFreeReady, NotificationOutAndSuccessorOperation}
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{NextReevaluation, NoSuccessor}
-import rescala.fullmv.mirrors.FullMVTurnProxy
 import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation}
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 
-class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends TurnImpl[FullMVStruct] with FullMVTurnProxy {
+class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends TurnImpl[FullMVStruct] {
   val taskQueue = new ConcurrentLinkedQueue[FullMVAction]()
   val waiters = new ConcurrentHashMap[Thread, TurnPhase.Type]()
 
-  val hc = ThreadLocalRandom.current().nextInt()
+  private val hc = ThreadLocalRandom.current().nextInt()
   override def hashCode(): Int = hc
 
   val phaseLock = new ReentrantReadWriteLock()
   @volatile var phase: TurnPhase.Type = TurnPhase.Initialized
 
   val successorsIncludingSelf: ArrayBuffer[FullMVTurn] = ArrayBuffer(this) // this is implicitly a set
-  val selfNode = new MutableTransactionSpanningTreeNode[FullMVTurn](this)
+  @volatile var selfNode = new MutableTransactionSpanningTreeNode[FullMVTurn](this)
   @volatile var predecessorSpanningTreeNodes: Map[FullMVTurn, MutableTransactionSpanningTreeNode[FullMVTurn]] = Map(this -> selfNode)
 
   //========================================================Local State Control============================================================
@@ -50,14 +49,14 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
             if (taskQueue.isEmpty && (predecessorSpanningTreeNodes eq compare)) {
               this.phase = newPhase
               waiters.forEach(new BiConsumer[Thread, TurnPhase.Type] {
-                override def accept(t: Thread, u: TurnPhase.Type) = if (u <= newPhase) {
+                override def accept(t: Thread, u: TurnPhase.Type): Unit = if (u <= newPhase) {
                   if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] ${FullMVTurn.this} phase switch unparking ${t.getName}.")
                   LockSupport.unpark(t)
                 }
               })
               if (newPhase == TurnPhase.Completed) {
                 predecessorSpanningTreeNodes = Map.empty
-                selfNode.children = Set.empty
+                selfNode = null
               }
               if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this switched phase.")
               true
@@ -89,13 +88,6 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     predecessorSpanningTreeNodes.contains(txn)
   }
 
-
-  override def acquirePhaseLockAndGetEstablishmentBundle(): (TurnPhase.Type, TransactionSpanningTreeNode[FullMVTurn]) = {
-    // TODO think about how and where to try{}finally{unlock()} this..
-    phaseLock.readLock().lock()
-    (phase, selfNode)
-  }
-
   def acquirePhaseLockIfAtMost(maxPhase: TurnPhase.Type): TurnPhase.Type = {
     val pOptimistic = phase
     if(pOptimistic > maxPhase) {
@@ -108,45 +100,39 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     }
   }
 
-  def addPredecessor(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
-    assert(DecentralizedSGT.lock.isHeldByCurrentThread, s"addPredecessor by thread that doesn't hold the SGT lock")
+  def addPredecessor(predecessorSpanningTree: MutableTransactionSpanningTreeNode[FullMVTurn]): Unit = {
+    assert(SerializationGraphTracking.lock.isHeldByCurrentThread, s"addPredecessor by thread that doesn't hold the SGT lock")
     @inline def predecessor = predecessorSpanningTree.txn
     assert(!isTransitivePredecessor(predecessor), s"attempted to establish already existing predecessor relation $predecessor -> $this")
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new predecessor $predecessor.")
     for(succ <- successorsIncludingSelf) succ.maybeNewReachableSubtree(this, predecessorSpanningTree)
   }
 
-  def addPredecessorAndReleasePhaseLock(predecessorSpanningTree: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
-    addPredecessor(predecessorSpanningTree)
-    phaseLock.readLock().unlock()
-  }
-
-  override def maybeNewReachableSubtree(attachBelow: FullMVTurn, spanningSubTreeRoot: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+  def maybeNewReachableSubtree(attachBelow: FullMVTurn, spanningSubTreeRoot: MutableTransactionSpanningTreeNode[FullMVTurn]): Unit = {
     if (!isTransitivePredecessor(spanningSubTreeRoot.txn)) {
       copySubTreeRootAndAssessChildren(attachBelow, spanningSubTreeRoot)
     }
   }
 
-  private def copySubTreeRootAndAssessChildren(attachBelow: FullMVTurn, spanningSubTreeRoot: TransactionSpanningTreeNode[FullMVTurn]): Unit = {
+  private def copySubTreeRootAndAssessChildren(attachBelow: FullMVTurn, spanningSubTreeRoot: MutableTransactionSpanningTreeNode[FullMVTurn]): Unit = {
     val newTransitivePredecessor = spanningSubTreeRoot.txn
     // last chance to check if predecessor completed concurrently
     if(newTransitivePredecessor.phase != TurnPhase.Completed) {
       newTransitivePredecessor.newSuccessor(this)
       val copiedSpanningTreeNode = new MutableTransactionSpanningTreeNode(newTransitivePredecessor)
       predecessorSpanningTreeNodes += newTransitivePredecessor -> copiedSpanningTreeNode
-      predecessorSpanningTreeNodes(attachBelow).children += copiedSpanningTreeNode
+      predecessorSpanningTreeNodes(attachBelow).add(copiedSpanningTreeNode)
 
-      for (child <- spanningSubTreeRoot.children) {
-        maybeNewReachableSubtree(newTransitivePredecessor, child)
+      val it = spanningSubTreeRoot.iterator()
+      while(it.hasNext) {
+        maybeNewReachableSubtree(newTransitivePredecessor, it.next())
       }
     }
   }
 
-  override def newSuccessor(successor: FullMVTurn): Unit = {
-    successorsIncludingSelf += successor
-  }
+  def newSuccessor(successor: FullMVTurn): Unit = successorsIncludingSelf += successor
 
-  override def asyncReleasePhaseLock(): Unit = phaseLock.readLock().unlock()
+  def asyncReleasePhaseLock(): Unit = phaseLock.readLock().unlock()
 
   //========================================================ToString============================================================
 
