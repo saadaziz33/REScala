@@ -5,7 +5,7 @@ import java.util.concurrent.locks.{Lock, ReentrantLock}
 import java.util.concurrent.{ThreadLocalRandom, TimeUnit}
 
 import benchmarks.philosophers.PhilosopherTable.{Seating, Thinking}
-import benchmarks.{EngineParam, Workload}
+import benchmarks.{BusyThreads, EngineParam, Workload}
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.{BenchmarkParams, ThreadParams}
 import rescala.core.Struct
@@ -66,7 +66,7 @@ class PhilosopherCompetition[S <: Struct] {
 
 
 @State(Scope.Benchmark)
-class Competition[S <: Struct] {
+class Competition[S <: Struct] extends BusyThreads {
 
   @Param(Array("16", "32"))
   var philosophers: Int = _
