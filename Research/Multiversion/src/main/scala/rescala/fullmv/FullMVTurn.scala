@@ -23,7 +23,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   @volatile var phase: TurnPhase.Type = TurnPhase.Initialized
 
   val successorsIncludingSelf: ArrayBuffer[FullMVTurn] = ArrayBuffer(this) // this is implicitly a set
-  @volatile var selfNode = new MutableTransactionSpanningTreeNode[FullMVTurn](this)
+  @volatile var selfNode = new MutableTransactionSpanningTreeNode[FullMVTurn](this) // this is also implicitly a set
   @volatile var predecessorSpanningTreeNodes: Map[FullMVTurn, MutableTransactionSpanningTreeNode[FullMVTurn]] = Map(this -> selfNode)
 
   //========================================================Local State Control============================================================
@@ -102,9 +102,8 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   def addPredecessor(predecessorSpanningTree: MutableTransactionSpanningTreeNode[FullMVTurn]): Unit = {
     assert(SerializationGraphTracking.lock.isHeldByCurrentThread, s"addPredecessor by thread that doesn't hold the SGT lock")
-    @inline def predecessor = predecessorSpanningTree.txn
-    assert(!isTransitivePredecessor(predecessor), s"attempted to establish already existing predecessor relation $predecessor -> $this")
-    if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new predecessor $predecessor.")
+    assert(!isTransitivePredecessor(predecessorSpanningTree.txn), s"attempted to establish already existing predecessor relation ${predecessorSpanningTree.txn} -> $this")
+    if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this new predecessor ${predecessorSpanningTree.txn}.")
     for(succ <- successorsIncludingSelf) succ.maybeNewReachableSubtree(this, predecessorSpanningTree)
   }
 
