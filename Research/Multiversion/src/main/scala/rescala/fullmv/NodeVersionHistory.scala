@@ -608,7 +608,33 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     }
   }
 
-  @tailrec private def tryRecordRelationship(attemptPredecessor: T, predPos: Int, succToRecord: T, defender: T, contender: T, sccState: SCCState): (TryRecordResult, SCCState) = {
+  private def tryRecordRelationship(attemptPredecessor: T, predPos: Int, succToRecord: T, defender: T, contender: T, sccState: SCCState): (TryRecordResult, SCCState) = {
+    @inline @tailrec def tryRecordRelationship0(sccState: SCCState): (TryRecordResult, SCCState) = {
+      sccState match {
+        case x: LockedSameSCC =>
+          if (attemptPredecessor.isTransitivePredecessor(succToRecord)) {
+            (FailedFinalAndRecorded, x)
+          } else {
+            ensurePredecessorRelationRecordedUnderLock(attemptPredecessor, predPos, succToRecord)
+            (Succeeded, x)
+          }
+        case otherwise =>
+          if (attemptPredecessor.phase == TurnPhase.Completed) {
+            assert(predPos >= 0, s"supposed-to-be predecessor $attemptPredecessor completed this having been assumed impossible")
+            latestGChint = predPos
+            SerializationGraphTracking.abortContending()
+            (Succeeded, sccState)
+          } else if(succToRecord.isTransitivePredecessor(attemptPredecessor)) {
+            SerializationGraphTracking.abortContending()
+            (Succeeded, sccState.known)
+          } else if (attemptPredecessor.isTransitivePredecessor(succToRecord)) {
+            SerializationGraphTracking.abortContending()
+            (FailedFinalAndRecorded, sccState.known)
+          } else {
+            tryRecordRelationship0(SerializationGraphTracking.tryLock(defender, contender, sccState))
+          }
+      }
+    }
     sccState match {
       case x: LockedSameSCC =>
         if (attemptPredecessor.isTransitivePredecessor(succToRecord)) {
@@ -622,17 +648,37 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
           assert(predPos >= 0, s"supposed-to-be predecessor $attemptPredecessor completed this having been assumed impossible")
           latestGChint = predPos
           (Succeeded, sccState)
-        } else if(succToRecord.isTransitivePredecessor(attemptPredecessor)) {
+        } else if (succToRecord.isTransitivePredecessor(attemptPredecessor)) {
           (Succeeded, sccState.known)
         } else if (attemptPredecessor.isTransitivePredecessor(succToRecord)) {
           (FailedFinalAndRecorded, sccState.known)
         } else {
-          tryRecordRelationship(attemptPredecessor, predPos: Int, succToRecord, defender, contender, SerializationGraphTracking.tryLock(defender, contender, sccState))
+          SerializationGraphTracking.startContending()
+          tryRecordRelationship0(SerializationGraphTracking.tryLock(defender, contender, sccState))
         }
     }
   }
 
-  @tailrec private def ensureRelationIsRecorded(predecessor: T, predPos: Int, successor: T, defender: T, contender: T, sccState: SCCState): SCCState = {
+  private def ensureRelationIsRecorded(predecessor: T, predPos: Int, successor: T, defender: T, contender: T, sccState: SCCState): SCCState = {
+    @inline @tailrec def ensureRelationIsRecorded0(sccState: SCCState): SCCState = {
+      sccState match {
+        case x: LockedSameSCC =>
+          ensurePredecessorRelationRecordedUnderLock(predecessor, predPos, successor)
+          x
+        case otherwise =>
+          if (predecessor.phase == TurnPhase.Completed) {
+            assert(predPos >= 0, s"supposed-to-be predecessor $predecessor completed this having been assumed impossible")
+            latestGChint = predPos
+            SerializationGraphTracking.abortContending()
+            sccState
+          } else if (successor.isTransitivePredecessor(predecessor)) {
+            SerializationGraphTracking.abortContending()
+            sccState.known
+          } else {
+            ensureRelationIsRecorded0(SerializationGraphTracking.tryLock(defender, contender, sccState))
+          }
+      }
+    }
     sccState match {
       case x: LockedSameSCC =>
         ensurePredecessorRelationRecordedUnderLock(predecessor, predPos, successor)
@@ -645,7 +691,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         } else if (successor.isTransitivePredecessor(predecessor)) {
           sccState.known
         } else {
-          ensureRelationIsRecorded(predecessor, predPos, successor, defender, contender, SerializationGraphTracking.tryLock(defender, contender, sccState))
+          SerializationGraphTracking.startContending()
+          ensureRelationIsRecorded0(SerializationGraphTracking.tryLock(defender, contender, sccState))
         }
     }
   }
