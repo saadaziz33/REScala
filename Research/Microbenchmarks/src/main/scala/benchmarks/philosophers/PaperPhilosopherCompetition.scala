@@ -46,18 +46,18 @@ class PaperCompetition[S <: Struct] extends BusyThreads {
   def setup(params: BenchmarkParams, work: Workload, engineParam: EngineParam[S]) = {
     table = new PaperPhilosophers(philosophers, engineParam.engine, dynamicity == "dynamic")
 
-    if(engineParam.engineName == "fullmv") {
-      SerializationGraphTracking.out = new PrintStream(new FileOutputStream(s"fullmv-sgt-contention-$philosophers-${params.getThreads}-${System.currentTimeMillis()}.txt"))
-    }
+//    if(engineParam.engineName == "fullmv") {
+//      SerializationGraphTracking.out = new PrintStream(new FileOutputStream(s"fullmv-sgt-contention-$philosophers-${params.getThreads}-${System.currentTimeMillis()}.txt"))
+//    }
   }
 
-  @TearDown(Level.Iteration)
-  def writeLockContentionTimer(): Unit = {
-    if(SerializationGraphTracking.out != null) {
-      SerializationGraphTracking.out.close()
-      SerializationGraphTracking.out = null
-    }
-  }
+//  @TearDown(Level.Iteration)
+//  def writeLockContentionTimer(): Unit = {
+//    if(SerializationGraphTracking.out != null) {
+//      SerializationGraphTracking.out.close()
+//      SerializationGraphTracking.out = null
+//    }
+//  }
 }
 
 
