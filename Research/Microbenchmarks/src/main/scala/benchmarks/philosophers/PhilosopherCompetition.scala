@@ -49,18 +49,34 @@ class PhilosopherCompetition[S <: Struct] {
     val secondLock = comp.locks(pos(1))
     val thirdLock = comp.locks(pos(2))
     firstLock.lock()
-    try {
+    val res = try {
       secondLock.lock()
       try {
         thirdLock.lock()
         try {
-          tryUpdateCycle(comp, seating)
+          comp.table.tryEat(seating)
         }
         finally {thirdLock.unlock()}
       }
       finally {secondLock.unlock()}
     }
     finally {firstLock.unlock()}
+    if (res) {
+      firstLock.lock()
+      try {
+        secondLock.lock()
+        try {
+          thirdLock.lock()
+          try {
+            seating.philosopher.set(Thinking)(comp.table.engine)
+          }
+          finally {thirdLock.unlock()}
+        }
+        finally {secondLock.unlock()}
+      }
+      finally {firstLock.unlock()}
+    }
+    !res
   }
 }
 
