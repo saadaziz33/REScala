@@ -1,12 +1,12 @@
 #!/bin/sh
 # Job name
-#SBATCH -J universe-locksweep
+#SBATCH -J universe-fullmv
 #
 # array config
 #SBATCH -a 1-16
 #
 # output file
-#SBATCH -o universe-locksweep-%j.txt
+#SBATCH -o universe-fullmv-%j.txt
 #
 # Project ID
 #SBATCH -A project00625
@@ -39,5 +39,5 @@ java -version
 echo "---------------------------------------------"
 
 export LANG=en_US.UTF-8
-export JAVA_OPTS="-Xmx1024m -Xms1024m -DengineName=parrp"
+export JAVA_OPTS="-Xmx1024m -Xms1024m -DengineName=fullmv"
 ./target/start
