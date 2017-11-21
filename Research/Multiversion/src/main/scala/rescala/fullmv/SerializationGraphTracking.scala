@@ -1,5 +1,7 @@
 package rescala.fullmv
 
+import java.io.PrintStream
+import java.util.concurrent.atomic.{AtomicInteger, AtomicLong}
 import java.util.concurrent.locks.{Lock, ReentrantLock}
 
 sealed trait SCCState {
@@ -19,24 +21,23 @@ case class LockedSameSCC(lock: Lock) extends SCCState {
   override def unlockedIfLocked(): UnlockedSameSCC.type = unlock()
   override def known: this.type = this
   def unlock(): UnlockedSameSCC.type = {
+    SerializationGraphTracking.released()
     lock.unlock()
-//    SerializationGraphTracking.released()
     UnlockedSameSCC
   }
 }
 
-object SerializationGraphTracking /* extends LockContentionTimer */ {
+object SerializationGraphTracking extends LockContentionTimer {
   val lock: ReentrantLock = new ReentrantLock()
-//  var out: PrintStream = null
 
   def acquireLock(defender: FullMVTurn, contender: FullMVTurn, sccState: SCCState): LockedSameSCC = {
     sccState match {
       case x@LockedSameSCC(_) =>
-//        entered()
+        entered()
         x
       case somethingUnlocked =>
         lock.lock()
-//        entered()
+        entered()
         LockedSameSCC(lock)
     }
   }
@@ -44,11 +45,11 @@ object SerializationGraphTracking /* extends LockContentionTimer */ {
   def tryLock(defender: FullMVTurn, contender: FullMVTurn, sccState: SCCState): SCCState = {
     sccState match {
       case x@LockedSameSCC(_) =>
-//        entered()
+        entered()
         x
       case somethingUnlocked =>
         if(lock.tryLock()) {
-//          entered()
+          entered()
           LockedSameSCC(lock)
         } else {
           Thread.`yield`()
@@ -58,28 +59,60 @@ object SerializationGraphTracking /* extends LockContentionTimer */ {
   }
 }
 
-//trait LockContentionTimer {
-//  def out: PrintStream
-//  val latestTimePerThread = new ThreadLocal[Long]
-//
-//  def startContending(): Unit = if(out != null) {
-//    val now = System.nanoTime()
-//    latestTimePerThread.set(now)
-//  }
-//  def abortContending(): Unit = if(out != null) {
-//    val started = latestTimePerThread.get()
-//    val now = System.nanoTime()
-//    out.println("s\t"+(now - started))
-//  }
-//  def entered(): Unit = if(out != null) {
-//    val started = latestTimePerThread.get()
-//    val now = System.nanoTime()
-//    out.println("e\t"+(now - started))
-//    latestTimePerThread.set(now)
-//  }
-//  def released(): Unit = if(out != null) {
-//    val started = latestTimePerThread.get()
-//    val now = System.nanoTime()
-//    out.println("r\t"+(now - started))
-//  }
-//}
+trait LockContentionTimer {
+  var contendedAcquiredDuration: Long = 0L
+  var contendedAcquiredStatistics: Array[Int] = Array.fill(200)(0)
+  var heldDuration: Long = 0L
+  var heldStatistics: Array[Int] = Array.fill(200)(0)
+  var contendedAbortedDuration: AtomicLong = new AtomicLong(0)
+  var contendedAbortedStatistics: Array[AtomicInteger] = Array.fill(200)(new AtomicInteger(0))
+
+  def printStatistics(printWriter: PrintStream): Unit = {
+    printWriter.println("category/slot\tacquired\theld\taborted")
+    printWriter.println(s"sum\t$contendedAcquiredDuration\t$heldDuration\t${contendedAbortedDuration.get}")
+    for(i <- contendedAcquiredStatistics.indices)
+      if(contendedAcquiredStatistics(i) != 0 || heldStatistics(i) != 0 || contendedAbortedStatistics(i).get != 0)
+        printWriter.println(s"$i\t${contendedAcquiredStatistics(i)}\t${heldStatistics(i)}\t${contendedAbortedStatistics(i).get}")
+  }
+
+  def clear(): Unit = {
+    contendedAcquiredDuration = 0L
+    contendedAcquiredStatistics = Array.fill(contendedAcquiredStatistics.length)(0)
+    heldDuration = 0L
+    heldStatistics = Array.fill(heldStatistics.length)(0)
+    contendedAbortedDuration = new AtomicLong(0)
+    contendedAbortedStatistics = Array.fill(contendedAbortedStatistics.length)(new AtomicInteger(0))
+  }
+
+  val latestTimePerThread = new ThreadLocal[Long]
+
+  def startContending(): Unit = {
+    val now = System.nanoTime()
+    latestTimePerThread.set(now)
+  }
+  def abortContending(): Unit = {
+    val started = latestTimePerThread.get()
+    val now = System.nanoTime()
+    val duration = now - started
+    contendedAbortedDuration.addAndGet(duration)
+    val slot = (duration / 100).toInt
+    if(slot < contendedAbortedStatistics.length) contendedAbortedStatistics(slot).getAndIncrement()
+  }
+  def entered(): Unit = {
+    val started = latestTimePerThread.get()
+    val now = System.nanoTime()
+    val duration = now - started
+    contendedAcquiredDuration += duration
+    val slot = (duration / 100).toInt
+    if(slot < contendedAbortedStatistics.length) contendedAcquiredStatistics(slot) += 1
+    latestTimePerThread.set(now)
+  }
+  def released(): Unit = {
+    val started = latestTimePerThread.get()
+    val now = System.nanoTime()
+    val duration = now - started
+    heldDuration += duration
+    val slot = (duration / 100).toInt
+    if(slot < contendedAbortedStatistics.length) heldStatistics(slot) += 1
+  }
+}
