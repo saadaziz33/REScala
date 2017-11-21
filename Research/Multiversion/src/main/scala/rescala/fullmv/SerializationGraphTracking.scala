@@ -70,9 +70,11 @@ trait LockContentionTimer {
   def printStatistics(printWriter: PrintStream): Unit = {
     printWriter.println("category/slot\tacquired\theld\taborted")
     printWriter.println(s"sum\t$contendedAcquiredDuration\t$heldDuration\t${contendedAbortedDuration.get}")
+    printWriter.println(f"percentage\t${contendedAcquiredDuration/1e7}%.4f\t${heldDuration/1e7}%.4f\t${{contendedAbortedDuration.get}/1e7}%.4f")
+    printWriter.println(s"counts\t${contendedAcquiredStatistics.sum}\t${heldStatistics.sum}\t${contendedAbortedStatistics.map(_.get).sum}")
     for(i <- contendedAcquiredStatistics.indices)
       if(contendedAcquiredStatistics(i) != 0 || heldStatistics(i) != 0 || contendedAbortedStatistics(i).get != 0)
-        printWriter.println(s"$i\t${contendedAcquiredStatistics(i)}\t${heldStatistics(i)}\t${contendedAbortedStatistics(i).get}")
+        printWriter.println(s"${i*25}-${i*25+24}\t${contendedAcquiredStatistics(i)}\t${heldStatistics(i)}\t${contendedAbortedStatistics(i).get}")
   }
 
   def clear(): Unit = {
@@ -95,7 +97,7 @@ trait LockContentionTimer {
     val now = System.nanoTime()
     val duration = now - started
     contendedAbortedDuration.addAndGet(duration)
-    val slot = (duration / 100).toInt
+    val slot = (duration / 25).toInt
     if(slot < contendedAbortedStatistics.length) contendedAbortedStatistics(slot).getAndIncrement()
   }
   def entered(): Unit = {
@@ -103,7 +105,7 @@ trait LockContentionTimer {
     val now = System.nanoTime()
     val duration = now - started
     contendedAcquiredDuration += duration
-    val slot = (duration / 100).toInt
+    val slot = (duration / 25).toInt
     if(slot < contendedAbortedStatistics.length) contendedAcquiredStatistics(slot) += 1
     latestTimePerThread.set(now)
   }
@@ -112,7 +114,7 @@ trait LockContentionTimer {
     val now = System.nanoTime()
     val duration = now - started
     heldDuration += duration
-    val slot = (duration / 100).toInt
+    val slot = (duration / 25).toInt
     if(slot < contendedAbortedStatistics.length) heldStatistics(slot) += 1
   }
 }
