@@ -2,8 +2,8 @@ package rescala.fullmv
 
 import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.ForkJoinPool.ManagedBlocker
+import java.util.concurrent.locks.LockSupport
 
-import rescala.core.Pulse.Exceptional
 import rescala.core.ValuePersistency
 import rescala.fullmv.NodeVersionHistory._
 
@@ -51,7 +51,7 @@ object NotificationResultAction {
   * @tparam OutDep the type of outgoing dependency nodes
   */
 class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePersistency: ValuePersistency[V]) extends FullMVState[V, T, InDep, OutDep] {
-  class Version(val txn: T, var lastWrittenPredecessorIfStable: Version, var out: Set[OutDep], var pending: Int, var changed: Int, var value: Option[V]) extends ManagedBlocker {
+  class Version(val txn: T, @volatile var lastWrittenPredecessorIfStable: Version, var out: Set[OutDep], var pending: Int, var changed: Int, @volatile var value: Option[V]) extends ManagedBlocker {
     // txn >= Executing, stable == true, node reevaluation completed changed
     def isWritten: Boolean = changed == 0 && value.isDefined
     // txn <= WrapUp, any following versions are stable == false
@@ -79,19 +79,21 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       value.get
     }
 
-    var finalWaiters: Int = 0
-    var stableWaiters: Int = 0
-    override def block(): Boolean = NodeVersionHistory.this.synchronized {
-      isReleasable || {
-        finalWaiters += 1
-        NodeVersionHistory.this.wait()
-        finalWaiters -= 1
-        isReleasable }
+    @volatile var finalWaiters: Int = 0
+    @volatile var stableWaiters: Int = 0
+    override def block(): Boolean = {
+      finalWaiters += 1
+      assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
+      if(!isReleasable) {
+        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] parking for final $this.")
+        LockSupport.park(NodeVersionHistory.this)
+        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparked on $this.")
+      }
+      finalWaiters -= 1
+      isReleasable
     }
 
-    override def isReleasable: Boolean = NodeVersionHistory.this.synchronized {
-      isFinal
-    }
+    override def isReleasable: Boolean = isFinal
 
     // common blocking case (now, dynamicDepend): Use self as blocker instance to reduce garbage
     def blockForFinal: ManagedBlocker = this
@@ -102,16 +104,18 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     def blockForStable: ManagedBlocker = {
       if(_blockForStable == null) {
         _blockForStable = new ManagedBlocker {
-          override def block(): Boolean = NodeVersionHistory.this.synchronized {
-            isReleasable || {
-              stableWaiters += 1
-              NodeVersionHistory.this.wait()
-              stableWaiters -= 1
-              isReleasable }
+          override def block(): Boolean = {
+            stableWaiters += 1
+            assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
+            if(!isReleasable) {
+              if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] parking for stable ${Version.this}")
+              LockSupport.park(NodeVersionHistory.this)
+              if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparked on ${Version.this}")
+            }
+            stableWaiters -= 1
+            isReleasable
           }
-          override def isReleasable: Boolean = NodeVersionHistory.this.synchronized {
-            isStable
-          }
+          override def isReleasable: Boolean = isStable
         }
       }
       _blockForStable
@@ -829,30 +833,27 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     }
   }
 
-  private def stabilizeForwardsUntilFrame(stabilizeTo: Version): Boolean = {
-    @tailrec @inline def stabilizeForwardsUntilFrame0(encounteredWaiter: Boolean): Boolean = {
-      firstFrame += 1
-      if (firstFrame < size) {
-        val version = _versions(firstFrame)
-        assert(!version.isStable, s"cannot stabilize $firstFrame: $version")
-        version.lastWrittenPredecessorIfStable = stabilizeTo
-        val updatedEncounteredWaiters = encounteredWaiter || version.stableWaiters > 0
-        if (!version.isFrame) {
-          stabilizeForwardsUntilFrame0(updatedEncounteredWaiters || version.finalWaiters > 0)
-        } else {
-          updatedEncounteredWaiters
-        }
-      } else {
-        encounteredWaiter
-      }
+  @tailrec private def stabilizeForwardsUntilFrame(stabilizeTo: Version): Unit = {
+    val finalized = _versions(firstFrame)
+    if(finalized.finalWaiters > 0) {
+      if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparking ${finalized.txn.userlandThread.getName} after finalized $finalized.")
+      LockSupport.unpark(finalized.txn.userlandThread)
     }
-    stabilizeForwardsUntilFrame0(_versions(firstFrame).finalWaiters > 0)
+    firstFrame += 1
+    if (firstFrame < size) {
+      val stabilized = _versions(firstFrame)
+      assert(!stabilized.isStable, s"cannot stabilize $firstFrame: $stabilized")
+      stabilized.lastWrittenPredecessorIfStable = stabilizeTo
+      if(stabilized.stableWaiters > 0) {
+        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparking ${stabilized.txn.userlandThread.getName} after stabilized $stabilized.")
+        LockSupport.unpark(stabilized.txn.userlandThread)
+      }
+      if (!stabilized.isFrame) stabilizeForwardsUntilFrame(stabilizeTo)
+    }
   }
 
   private def deframeResultAfterPreviousFirstFrameWasRemoved(txn: T, version: Version) = {
-    val encounteredWaiters = stabilizeForwardsUntilFrame(version)
-    assert(!encounteredWaiters, "someone was waiting for a version by a framing transaction, but only executing transactions should perform waiting and they should never see framing transactions' versions.")
-
+    stabilizeForwardsUntilFrame(version)
     if(firstFrame < size) {
       FramingBranchResult.DeframeReframe(version.out, txn, _versions(firstFrame).txn)
     } else {
@@ -939,11 +940,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     assert(version.txn == turn, s"$turn called reevDone, but first frame is $version (different transaction)")
     assert(!version.isWritten, s"$turn cannot write twice: $version")
     assert((version.isFrame && version.isReadyForReevaluation) || (maybeValue.isEmpty && version.isReadOrDynamic), s"$turn cannot write changed=${maybeValue.isDefined} in $this")
-    maybeValue match {
-      case Some(Exceptional(t)) => t.printStackTrace()
-      case _ =>
-    }
 
+    version.changed = 0
     latestReevOut = position
     val stabilizeTo = if(maybeValue.isDefined) {
       latestValue = maybeValue.get
@@ -952,7 +950,6 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     } else {
       version.lastWrittenPredecessorIfStable
     }
-    version.changed = 0
 
     val result = progressToNextWriteForNotification(version, stabilizeTo)
     assertOptimizationsIntegrity(s"reevOut($turn, ${maybeValue.isDefined}) -> $result")
@@ -966,7 +963,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @return the notification and next reevaluation descriptor.
     */
   private def progressToNextWriteForNotification(finalizedVersion: Version, stabilizeTo: Version): NotificationResultAction.NotificationOutAndSuccessorOperation[T, OutDep] = {
-    val encounteredWaiters = stabilizeForwardsUntilFrame(stabilizeTo)
+    stabilizeForwardsUntilFrame(stabilizeTo)
     val res = if(firstFrame < size) {
       val newFirstFrame = _versions(firstFrame)
       if(newFirstFrame.isReadyForReevaluation) {
@@ -977,7 +974,6 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     } else {
       NotificationResultAction.NotificationOutAndSuccessorOperation.NoSuccessor(finalizedVersion.out)
     }
-    if(encounteredWaiters) notifyAll()
     res
   }
 
@@ -1012,43 +1008,23 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @return the corresponding [[Version.value]] from before this transaction, i.e., ignoring the transaction's
     *         own writes.
     */
-  override def dynamicBefore(txn: T): V = synchronized {
+  override def dynamicBefore(txn: T): V = {
     assert(!valuePersistency.isTransient, s"$txn invoked dynamicBefore on transient node")
-    synchronized {
-      val position = ensureReadVersion(txn)._1
-      val version = _versions(position)
-      if(version.isStable) {
-        Left(version.lastWrittenPredecessorIfStable.value.get)
-      } else {
-        Right(version)
-      }
-    } match {
-      case Left(value) => value
-      case Right(version) =>
+    val version = synchronized { _versions(ensureReadVersion(txn)._1) }
+    if(!version.isStable) ForkJoinPool.managedBlock(version.blockForStable)
+    version.lastWrittenPredecessorIfStable.value.get
+  }
 
-        ForkJoinPool.managedBlock(version.blockForStable)
-        version.lastWrittenPredecessorIfStable.value.get
+  override def staticBefore(txn: T): V = {
+    assert(!valuePersistency.isTransient, s"$txn invoked staticBefore on transient struct")
+    val version = synchronized {
+      val pos = findFinalPosition(txn)
+      _versions(if (pos < 0) -pos - 1 else pos)
     }
-  }
-
-  override def staticBefore(txn: T): V = synchronized {
-    beforeKnownStable(txn, math.abs(findFinalPosition(txn)))
-  }
-
-  private def beforeKnownStable(txn: T, position: Int): V = {
-    assert(position > 0, s"$txn cannot read before first version")
-    if(position == size) {
-      afterKnownFinal(_versions(position - 1))
+    if(version.txn != txn && version.value.isDefined) {
+      version.value.get
     } else {
-      _versions(position).lastWrittenPredecessorIfStable.value.get
-    }
-  }
-
-  private def beforeOrInitKnownStable(txn: T, position: Int): V = {
-    if(valuePersistency.isTransient) {
-      valuePersistency.initialValue
-    } else {
-      beforeKnownStable(txn, position)
+      version.lastWrittenPredecessorIfStable.value.get
     }
   }
 
@@ -1059,23 +1035,9 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     *         transaction's own write if one has occurred or will occur.
     */
   override def dynamicAfter(txn: T): V = {
-    synchronized {
-      val position = ensureReadVersion(txn)._1
-      val version = _versions(position)
-      if(version.isFinal) {
-        Left(afterKnownFinal(version))
-      } else {
-        Right(version)
-      }
-    } match {
-      case Left(value) => value
-      case Right(version) =>
-        ForkJoinPool.managedBlock(version.blockForFinal)
-        afterKnownFinal(version)
-    }
-  }
-
-  private def afterKnownFinal(version: Version) = {
+    val version = synchronized { _versions(ensureReadVersion(txn)._1) }
+    if(!version.isFinal) throw new AssertionError("currently not supported")
+    if(!version.isFinal) ForkJoinPool.managedBlock(version.blockForFinal)
     if (version.value.isDefined) {
       version.value.get
     } else if(valuePersistency.isTransient) {
@@ -1086,13 +1048,16 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   override def staticAfter(txn: T): V = synchronized {
-    val position = findFinalPosition(txn)
-    if(position < 0) {
-      beforeOrInitKnownStable(txn, -position)
+    val version = synchronized {
+      val pos = findFinalPosition(txn)
+      _versions(if (pos < 0) -pos - 1 else pos)
+    }
+    if(valuePersistency.isTransient && (version.txn != txn || version.value.isEmpty)) {
+      valuePersistency.initialValue
+    } else if (version.value.isDefined) {
+      version.value.get
     } else {
-      val version = _versions(position)
-      assert(!version.isFrame, s"staticAfter discovered frame $version -- did the caller wrongly assume a statically known dependency?")
-      afterKnownFinal(version)
+      version.lastWrittenPredecessorIfStable.value.get
     }
   }
 
