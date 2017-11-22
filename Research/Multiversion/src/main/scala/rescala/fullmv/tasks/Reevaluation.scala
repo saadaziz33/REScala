@@ -2,29 +2,27 @@ package rescala.fullmv.tasks
 
 import java.util.concurrent.locks.LockSupport
 
-import rescala.core.Reactive
+import rescala.core.{Pulse, Reactive, ReevaluationResult}
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{FollowFraming, NextReevaluation, NoSuccessor}
 import rescala.fullmv._
 
-import scala.util.{Failure, Success, Try}
-
 case class Reevaluation(turn: FullMVTurn, node: Reactive[FullMVStruct]) extends FullMVAction {
   override def doCompute(): Unit = {
     assert(turn.phase == TurnPhase.Executing, s"$this cannot reevaluate (requires executing phase")
-    val result = turn.engine.withTurn(turn){ Try { node.reevaluate(turn, node.state.reevIn(turn), node.state.incomings) } }
-    result match {
-      case Failure(exception) =>
+    val res: ReevaluationResult[node.Value, FullMVStruct] = try {
+      node.reevaluate(turn, node.state.reevIn(turn), node.state.incomings)
+    } catch {
+      case exception: Throwable =>
         System.err.println(s"[FullMV Error] Reevaluation of $node failed with ${exception.getClass.getName}: ${exception.getMessage}; Completing reevaluation as NoChange.")
         exception.printStackTrace()
-        Reevaluation.processReevaluationResult(node, turn, node.state.reevOut(turn, None), changed = false)
-      case Success(res) =>
-        res.commitDependencyDiff(turn, node)
-        if(res.valueChanged) {
-          Reevaluation.processReevaluationResult(node, turn, node.state.reevOut(turn, if (res.valueChanged) Some(res.value) else None), changed = true)
-        } else {
-          Reevaluation.processReevaluationResult(node, turn, node.state.reevOut(turn, None), changed = false)
-        }
+        ReevaluationResult.Static[Nothing, FullMVStruct](Pulse.NoChange, node.state.incomings).asInstanceOf[ReevaluationResult[node.Value, FullMVStruct]]
+    }
+    res.commitDependencyDiff(turn, node)
+    if(res.valueChanged) {
+      Reevaluation.processReevaluationResult(node, turn, node.state.reevOut(turn, if (res.valueChanged) Some(res.value) else None), changed = true)
+    } else {
+      Reevaluation.processReevaluationResult(node, turn, node.state.reevOut(turn, None), changed = false)
     }
   }
 }
