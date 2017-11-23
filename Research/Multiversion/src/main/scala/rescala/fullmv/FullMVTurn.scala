@@ -135,7 +135,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================ToString============================================================
 
-  override def toString: String = s"FullMVTurn($hashCode, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
+  override def toString: String = s"FullMVTurn($hc, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
 
   //========================================================Scheduler Interface============================================================
 
@@ -186,13 +186,15 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
 
   override private[rescala] def discover(node: ReSource[FullMVStruct], addOutgoing: Reactive[FullMVStruct]): Unit = {
-    val (successorWrittenVersions, maybeFollowFrame) = node.state.discover(this, addOutgoing)
+    val r@(successorWrittenVersions, maybeFollowFrame) = node.state.discover(this, addOutgoing)
+    assert(!(successorWrittenVersions ++ maybeFollowFrame).exists(isTransitivePredecessor), s"$this retrofitting contains predecessors: discover $node -> $addOutgoing retrofits $r from ${node.state}")
     if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] Reevaluation($this,$addOutgoing) discovering $node -> $addOutgoing re-queueing $successorWrittenVersions and re-framing $maybeFollowFrame")
     addOutgoing.state.retrofitSinkFrames(successorWrittenVersions, maybeFollowFrame, 1)
   }
 
   override private[rescala] def drop(node: ReSource[FullMVStruct], removeOutgoing: Reactive[FullMVStruct]): Unit = {
-    val (successorWrittenVersions, maybeFollowFrame) = node.state.drop(this, removeOutgoing)
+    val r@(successorWrittenVersions, maybeFollowFrame) = node.state.drop(this, removeOutgoing)
+    assert(!(successorWrittenVersions ++ maybeFollowFrame).exists(isTransitivePredecessor), s"$this retrofitting contains predecessors: drop $node -> $removeOutgoing retrofits $r from ${node.state}")
     if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] Reevaluation($this,$removeOutgoing) dropping $node -> $removeOutgoing de-queueing $successorWrittenVersions and de-framing $maybeFollowFrame")
     removeOutgoing.state.retrofitSinkFrames(successorWrittenVersions, maybeFollowFrame, -1)
   }

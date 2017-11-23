@@ -4,6 +4,7 @@ import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.ForkJoinPool.ManagedBlocker
 import java.util.concurrent.locks.LockSupport
 
+import rescala.core.Pulse.Exceptional
 import rescala.core.ValuePersistency
 import rescala.fullmv.NodeVersionHistory._
 
@@ -31,7 +32,9 @@ object NotificationResultAction {
   case object ResolvedNonFirstFrameToUnchanged extends NotificationResultAction[Nothing, Nothing]
   case object GlitchFreeReadyButQueued extends NotificationResultAction[Nothing, Nothing]
   case object GlitchFreeReady extends NotificationResultAction[Nothing, Nothing]
-  sealed trait NotificationOutAndSuccessorOperation[+T, R] extends NotificationResultAction[T, R] {
+  sealed trait ReevOutResult[+T, +R]
+  case object Glitched extends ReevOutResult[Nothing, Nothing]
+  sealed trait NotificationOutAndSuccessorOperation[+T, R] extends NotificationResultAction[T, R] with ReevOutResult[T, R] {
     val out: Set[R]
   }
   object NotificationOutAndSuccessorOperation {
@@ -151,7 +154,6 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
 
   @elidable(ASSERTION) @inline
   def assertOptimizationsIntegrity(debugOutputDescription: => String): Unit = {
-    println("foo")
     def debugStatement(whatsWrong: String): String = s"$debugOutputDescription left $whatsWrong in $this"
     assert(size <= _versions.length, debugStatement("size out of bounds"))
     assert(size > 0, debugStatement("version list empty"))
@@ -438,8 +440,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   private def findOrPigeonHolePropagatingPredictive(lookFor: T, fromFinal: Int, fromFinalPredecessorRelationIsRecorded: Boolean, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCConnectivity): (Int, SCCConnectivity) = {
     assert(fromFinal <= toFinal, s"binary search started with backwards indices from $fromFinal to $toFinal")
     assert(toFinal <= size, s"binary search upper bound $toFinal beyond history size $size")
-    assert(toFinal == size || !(lookFor.isTransitivePredecessor(_versions(toFinal).txn) || _versions(toFinal).txn.phase == TurnPhase.Completed), s"to = $toFinal successor for non-blocking search of known static $lookFor pointed to version of ${_versions(toFinal).txn} which is ordered earlier.")
-    assert(!_versions(fromFinal - 1).txn.isTransitivePredecessor(lookFor), s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later.")
+    assert(toFinal == size || !(lookFor.isTransitivePredecessor(_versions(toFinal).txn) || _versions(toFinal).txn.phase == TurnPhase.Completed), s"to = $toFinal successor for non-blocking search of known static $lookFor pointed to version of ${_versions(toFinal).txn} which is ordered earlier in $this")
+    assert(!_versions(fromFinal - 1).txn.isTransitivePredecessor(lookFor), s"from - 1 = ${fromFinal - 1} predecessor for non-blocking search of $lookFor pointed to version of ${_versions(fromFinal - 1).txn} which is already ordered later in $this")
     assert(fromFinal > 0, s"binary search started with non-positive lower bound $fromFinal")
 
     val r = findOrPigeonHolePropagatingPredictive0(lookFor, fromFinal, fromFinalPredecessorRelationIsRecorded, fromFinal, toFinal, toFinal, toFinalRelationIsRecorded, sccState)
@@ -934,24 +936,31 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * progress [[firstFrame]] forward until a [[Version.isFrame]] is encountered, and
     * return the resulting notification out (with reframing if subsequent write is found).
     */
-  override def reevOut(turn: T, maybeValue: Option[V]): NotificationResultAction.NotificationOutAndSuccessorOperation[T, OutDep] = synchronized {
+  override def reevOut(turn: T, maybeValue: Option[V]): NotificationResultAction.ReevOutResult[T, OutDep] = synchronized {
     val position = firstFrame
     val version = _versions(position)
     assert(version.txn == turn, s"$turn called reevDone, but first frame is $version (different transaction)")
     assert(!version.isWritten, s"$turn cannot write twice: $version")
-    assert((version.isFrame && version.isReadyForReevaluation) || (maybeValue.isEmpty && version.isReadOrDynamic), s"$turn cannot write changed=${maybeValue.isDefined} in $this")
 
-    version.changed = 0
-    latestReevOut = position
-    val stabilizeTo = if(maybeValue.isDefined) {
-      latestValue = maybeValue.get
-      version.value = maybeValue
-      version
+    val result = if(version.pending != 0) {
+      NotificationResultAction.Glitched
     } else {
-      version.lastWrittenPredecessorIfStable
+      assert((version.isFrame && version.isReadyForReevaluation) || (maybeValue.isEmpty && version.isReadOrDynamic), s"$turn cannot write changed=${maybeValue.isDefined} in $this")
+      version.changed = 0
+      latestReevOut = position
+      val stabilizeTo = if (maybeValue.isDefined) {
+        latestValue = maybeValue.get
+        if(latestValue.isInstanceOf[Exceptional]){
+          println(s"[${Thread.currentThread().getName}] WARNING: glitch free evaluation result is exceptional:")
+          latestValue.asInstanceOf[Exceptional].throwable.printStackTrace()
+        }
+        version.value = maybeValue
+        version
+      } else {
+        version.lastWrittenPredecessorIfStable
+      }
+      progressToNextWriteForNotification(version, stabilizeTo)
     }
-
-    val result = progressToNextWriteForNotification(version, stabilizeTo)
     assertOptimizationsIntegrity(s"reevOut($turn, ${maybeValue.isDefined}) -> $result")
     result
   }
@@ -1036,8 +1045,10 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     */
   override def dynamicAfter(txn: T): V = {
     val version = synchronized { _versions(ensureReadVersion(txn)._1) }
-    if(!version.isFinal) throw new AssertionError("currently not supported")
-    if(!version.isFinal) ForkJoinPool.managedBlock(version.blockForFinal)
+    if(!version.isStable) ForkJoinPool.managedBlock(version.blockForStable)
+    if(!version.isFinal) latestValue else
+//    if(!version.isFinal) throw new AssertionError("currently not supported")
+//    if(!version.isFinal) ForkJoinPool.managedBlock(version.blockForFinal)
     if (version.value.isDefined) {
       version.value.get
     } else if(valuePersistency.isTransient) {
@@ -1113,6 +1124,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       // executing this then-ready reevaluation, but for now the version is guaranteed not stable yet.
       version.pending += arity
     }
+    assertOptimizationsIntegrity(s"retrofitSinkFrames(writes=$successorWrittenVersions, maybeFrame=$maybeSuccessorFrame)")
   }
 
   /**
@@ -1130,14 +1142,21 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     // (any version at index firstFrame or later can only be a frame, not written)
     val sizePrediction = math.max(firstFrame - position, 0)
     val successorWrittenVersions = new ArrayBuffer[T](sizePrediction)
+    var maybeSuccessorFrame: Option[T] = None
     for(pos <- position until size) {
       val version = _versions(pos)
       if(arity < 0) version.out -= delta else version.out += delta
       // as per above, this is implied false if pos >= firstFrame:
-      if(version.isWritten) successorWrittenVersions += version.txn
+      if(maybeSuccessorFrame.isEmpty) {
+        if(version.isWritten){
+          successorWrittenVersions += version.txn
+        } else if (version.isFrame) {
+          maybeSuccessorFrame = Some(version.txn)
+        }
+      }
     }
     if(successorWrittenVersions.size > sizePrediction) System.err.println(s"FullMV retrofitSourceOuts predicted size max($firstFrame - $position, 0) = $sizePrediction, but size eventually was ${successorWrittenVersions.size}")
-    val maybeSuccessorFrame = if (firstFrame < size) Some(_versions(firstFrame).txn) else None
+    assertOptimizationsIntegrity(s"retrofitSourceOuts(from=$position, outdiff=$arity $delta) -> (writes=$successorWrittenVersions, maybeFrame=$maybeSuccessorFrame)")
     (successorWrittenVersions, maybeSuccessorFrame)
   }
 

@@ -3,7 +3,7 @@ package rescala.fullmv.tasks
 import java.util.concurrent.locks.LockSupport
 
 import rescala.core.{Pulse, Reactive, ReevaluationResult}
-import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation
+import rescala.fullmv.NotificationResultAction.{Glitched, ReevOutResult}
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{FollowFraming, NextReevaluation, NoSuccessor}
 import rescala.fullmv._
 
@@ -28,9 +28,11 @@ case class Reevaluation(turn: FullMVTurn, node: Reactive[FullMVStruct]) extends 
 }
 
 object Reevaluation {
-  def processReevaluationResult(node: Reactive[FullMVStruct], turn: FullMVTurn, outAndSucc: NotificationOutAndSuccessorOperation[FullMVTurn, Reactive[FullMVStruct]], changed: Boolean): Unit = {
+  def processReevaluationResult(node: Reactive[FullMVStruct], turn: FullMVTurn, outAndSucc: ReevOutResult[FullMVTurn, Reactive[FullMVStruct]], changed: Boolean): Unit = {
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] Reevaluation($turn,$node) => ${if(changed) "changed" else "unchanged"} $outAndSucc")
     outAndSucc match {
+      case Glitched =>
+        // do nothing, reevaluation will be repeated at a later point
       case NoSuccessor(out) =>
         for(dep <- out) turn.taskQueue.offer(Notification(turn, dep, changed))
       case FollowFraming(out, succTxn) =>

@@ -34,7 +34,7 @@ class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynam
           case (Thinking, Thinking) => Free
           case (Eating, Thinking) => Taken(idx)
           case (Thinking, Eating) => Taken(nextIdx)
-          case (Eating, Eating) => throw new AssertionError()
+          case (Eating, Eating) => throw new AssertionError(s"fork $idx double use")
         }
       }
     }
@@ -57,7 +57,7 @@ class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynam
             }
             case Taken(by) =>
               if (by == idx) {
-                assert(forks(idx)() == Taken(idx))
+                assert(forks(idx)() == Taken(idx), s"sight $idx glitched")
                 Done
               } else {
                 Blocked(by)
@@ -70,10 +70,10 @@ class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynam
             case (Taken(left), Taken(right)) if left == idx && right == idx =>
               Done
             case (Taken(by), _) =>
-              assert(by != idx)
+              assert(by != idx, s"sight $idx glitched 1")
               Blocked(by)
             case (_, Taken(by)) =>
-              assert(by != idx)
+              assert(by != idx, s"sight $idx glitched 2")
               Blocked(by)
           }
         }
@@ -128,7 +128,9 @@ object PaperPhilosophers {
     val duration = if(args.length >= 3) Integer.parseInt(args(2)) else 0
 
     val engine = new rescala.fullmv.FullMVEngine(Duration.Zero, s"PaperPhilosophers($tableSize,$threadCount)")
-    val table = new PaperPhilosophers(tableSize, engine, dynamicEdgeChanges = false)
+    val table = new PaperPhilosophers(tableSize, engine, dynamicEdgeChanges = true)
+
+//    println("====================================================================================================")
 
     val continue: () => Boolean = if(duration == 0) {
       println("Running in interactive mode: press <Enter> to terminate.")
