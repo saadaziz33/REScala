@@ -15,7 +15,7 @@ import rescala.reactives.{Signal, Var}
 @Fork(1)
 @Threads(1)
 @State(Scope.Benchmark)
-class SingleChainSignal[S <: Struct] {
+class SingleChainSignal[S <: Struct] extends BusyThreads {
   implicit var engine: Engine[S] = _
   var source: Var[Int, S] = _
   var result: Signal[Int, S] = _

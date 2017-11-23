@@ -13,7 +13,7 @@ class BusyThreads {
   @volatile var running: Boolean = false
   var threads: Array[Thread] = _
   @Setup(Level.Iteration)
-  def bootBusyThreads(params: BenchmarkParams) = {
+  def bootBusyThreads(params: BenchmarkParams): Unit = {
     if(runBusyThreads) {
       running = true
       val numProcs = Runtime.getRuntime.availableProcessors()
@@ -36,7 +36,7 @@ class BusyThreads {
     }
   }
   @TearDown(Level.Iteration)
-  def stopBusyThreads() = {
+  def stopBusyThreads(): Unit = {
     if(runBusyThreads) {
       println("stopping busy threads...")
       val timeout = System.currentTimeMillis() + 1000
