@@ -11,39 +11,36 @@ object JMHtoCSV {
   val PARAMETERS = "^# Parameters: \\((.*)\\)$".r
   val MEASUREMENT = "^Iteration .*: (\\d+)[.,](\\d+) ops/ms$".r
 
+  var outfiles = Map[String, FileWriter]()
   var benchmark: String = _
   var threads: String = _
   var parameters: String = _
 
   def main(args: Array[String]): Unit = {
-    val out = new FileWriter(args.head)
     try {
-      for (fileName <- args.tail) {
+      for (fileName <- args) {
         println("processing "+fileName)
         for ((line, lineNo) <- Source.fromFile(fileName).getLines.zipWithIndex) {
           line match {
             case BENCHMARK(benchmarkName) =>
-              if (benchmark != null) {
-                if (benchmarkName != benchmark) throw new Exception(s"benchmark so far was $benchmark, but now found results for $benchmarkName in $fileName:$lineNo")
-              } else {
-                benchmark = benchmarkName
-              }
+              benchmark = benchmarkName
             case THREADS(threadCount) =>
               threads = threadCount
             case PARAMETERS(allParams) =>
-              if (parameters == null) {
-                out.write("threads\t" + allParams.substring(0, allParams.lastIndexOf('=')).replaceAll(" = [^=]+, ", "\t") + "\tmeasurement\n")
-              }
               parameters = allParams.substring(allParams.indexOf('=') + 2).replaceAll(", [^=]+ = ", "\t")
+              if(!outfiles.contains(benchmark)) {
+                outfiles += benchmark -> new FileWriter(benchmark + ".txt")
+                outfiles(benchmark).write("threads\t" + allParams.substring(0, allParams.lastIndexOf('=')).replaceAll(" = [^=]+, ", "\t") + "\tmeasurement\n")
+              }
             case MEASUREMENT(integer, decimal) =>
-              out.write(threads + "\t" + parameters + "\t" + integer + "," + decimal + "\n")
+              outfiles(benchmark).write(threads + "\t" + parameters + "\t" + integer + "," + decimal + "\n")
             case _ => // ignore
           }
         }
       }
     } finally {
-      out.close()
+      for(writer <- outfiles.values) writer.close()
     }
-    println("done, output written to "+args.head)
+    println("done, written files:\n" + outfiles.keySet.mkString(".txt\n") + ".txt")
   }
 }
