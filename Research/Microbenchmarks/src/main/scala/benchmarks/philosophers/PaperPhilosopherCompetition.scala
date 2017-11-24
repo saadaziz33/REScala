@@ -27,6 +27,8 @@ class PaperCompetition[S <: Struct] extends BusyThreads {
   var dynamicity: String = _
   @Param(Array("16", "32"))
   var philosophers: Int = _
+  @Param(Array("event", "signal"))
+  var topper: String = _
   var table: PaperPhilosophers[S] = _
 
   @Setup(Level.Trial)
@@ -43,7 +45,16 @@ class PaperCompetition[S <: Struct] extends BusyThreads {
 //  var stream: PrintStream = _
   @Setup(Level.Iteration)
   def setup(params: BenchmarkParams, work: Workload, engineParam: EngineParam[S]) = {
-    table = new PaperPhilosophers(philosophers, engineParam.engine, dynamicity == "dynamic")
+    val dynamic = dynamicity match {
+      case "dynamic" => true
+      case "semi-static" => false
+      case otherwise => throw new IllegalArgumentException("not a valid dynamicity: " + otherwise)
+    }
+    table = topper match {
+      case "event" => new PaperPhilosophers(philosophers, engineParam.engine, dynamic) with EventTopper[S]
+      case "signal" => new PaperPhilosophers(philosophers, engineParam.engine, dynamic) with SignalTopper[S]
+      case otherwise => throw new IllegalArgumentException("not a valid topper: " + otherwise)
+    }
 
 //    if(engineParam.engineName == "fullmv") {
 //      SerializationGraphTracking.clear()

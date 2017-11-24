@@ -3,6 +3,7 @@ package benchmarks.philosophers
 import java.util.concurrent.{Executors, ThreadLocalRandom}
 
 import rescala.core.{Engine, REName, Struct}
+import rescala.fullmv.FullMVStruct
 import rescala.parrp.Backoff
 
 import scala.annotation.tailrec
@@ -10,7 +11,7 @@ import scala.concurrent.{Await, Future, TimeoutException}
 import scala.concurrent.duration._
 import scala.util.{Failure, Success, Try}
 
-class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynamicEdgeChanges: Boolean) {
+abstract class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynamicEdgeChanges: Boolean) {
   import engine._
 
   sealed trait Philosopher
@@ -84,11 +85,6 @@ class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynam
     for(i <- 0 until size) yield sights(i).changed
   val successes = for(i <- 0 until size) yield
     sightChngs(i).filter(_ == Done)
-  val anySuccess = successes.reduce(_ || _)
-  val successCount: Signal[Int] =
-    REName.named(s"successCount") { implicit ! =>
-      anySuccess.fold(0) { (acc, _) => acc + 1 }
-    }
 
   def maybeEat(idx: Int): Unit = {
     transaction(phils(idx)) { implicit t =>
@@ -118,7 +114,38 @@ class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynam
     retryEating()
   }
 
+  // To be implemented by your choice of topper (see below)
+  val successCount: Signal[Int]
+
   def total: Int = successCount.now
+}
+
+trait EventTopper[S <: Struct] {
+  self: PaperPhilosophers[S] =>
+  import engine._
+
+  val anySuccess = successes.reduce(_ || _)
+  override val successCount: Signal[Int] =
+    REName.named(s"successCount") { implicit ! =>
+      anySuccess.fold(0) { (acc, _) => acc + 1 }
+    }
+}
+
+trait SignalTopper[S <: Struct] {
+  self: PaperPhilosophers[S] =>
+  import engine._
+
+  val individualCounts: Seq[Signal[Int]] =
+    for(i <- 0 until size) yield
+      REName.named(s"count($i)") { implicit ! =>
+        successes(i).fold(0) { (acc, _) => acc + 1 }
+      }
+  override val successCount: Signal[Int] =
+    individualCounts.reduce{ (a, b) =>
+      REName.named(s"sumUpTo($b)") { implicit ! =>
+        Signal { a() + b() }
+      }
+    }
 }
 
 object PaperPhilosophers {
@@ -127,8 +154,8 @@ object PaperPhilosophers {
     val threadCount = if(args.length >= 2) Integer.parseInt(args(1)) else tableSize
     val duration = if(args.length >= 3) Integer.parseInt(args(2)) else 0
 
-    val engine = new rescala.fullmv.FullMVEngine(Duration.Zero, s"PaperPhilosophers($tableSize,$threadCount)")
-    val table = new PaperPhilosophers(tableSize, engine, dynamicEdgeChanges = true)
+    implicit val engine = new rescala.fullmv.FullMVEngine(Duration.Zero, s"PaperPhilosophers($tableSize,$threadCount)")
+    val table = new PaperPhilosophers(tableSize, engine, dynamicEdgeChanges = true) with SignalTopper[FullMVStruct]
 
 //    println("====================================================================================================")
 
