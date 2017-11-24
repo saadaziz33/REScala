@@ -481,9 +481,9 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
           // an operation such as notifyFollowFrame(X, lookFor) was executed.
           // It searched for the position of lookFor, which at that time was Framing.
           // It encountered a version of Y, which was also framing, and took it as lower bound.
-          // Concurrently, Z transitioned to Executing
+          // Concurrently, lookFor transitioned to Executing
           // Then, the current termination attempt occurred.
-          // It attempted to record Y < lookFor, but that failed because Y is still Framing, but lookFor now Executing and thus must go earlier.
+          // It attempted to record Y < lookFor, but that failed because Y is still Framing but lookFor now Executing, and thus must go earlier.
           // Now we are here.
           // Now because lookFor must go before Y, we use the position of Y as the new exclusive upper bound for the fallback search.
           // In the future, though, Y may also transition to Executing.
@@ -571,7 +571,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
 
   private def tryOrderToPropagating(lookFor: T, toSpeculative: Int, toFinal: Int, toFinalRelationIsRecorded: Boolean, sccState: SCCState): (TryRecordResult, SCCState) = {
     if (toSpeculative < toFinal) {
-      assert(lookFor.phase == TurnPhase.Executing, s"$lookFor has a speculative successor, which should not happen while it's still framing.")
+      assert(lookFor.phase == TurnPhase.Executing, s"$lookFor has a speculative successor, which should only happen if it is no longer framing.")
       val succToRecord = _versions(toSpeculative).txn
       succToRecord.acquirePhaseLockIfAtMost(TurnPhase.Executing) match {
         case TurnPhase.Completed =>
