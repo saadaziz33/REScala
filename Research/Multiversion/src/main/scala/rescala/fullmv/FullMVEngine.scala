@@ -3,9 +3,7 @@ package rescala.fullmv
 import java.util.concurrent.Executor
 
 import rescala.core.{EngineImpl, ReSourciV}
-import rescala.fullmv.NotificationResultAction.GlitchFreeReady
-import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{FollowFraming, NoSuccessor}
-import rescala.fullmv.tasks.{Framing, Notification, NotificationWithFollowFrame}
+import rescala.fullmv.tasks._
 
 import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
 import scala.concurrent.duration._
@@ -28,7 +26,7 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
       if (setWrites.nonEmpty) {
         // framing phase
         turn.awaitAndSwitchPhase(TurnPhase.Framing)
-        for (i <- setWrites) turn.taskQueue.add(Framing(turn, i))
+        for (i <- setWrites) turn.offer(Framing(turn, i))
       }
 
       turn.awaitAndSwitchPhase(TurnPhase.Executing)
@@ -44,38 +42,9 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
 
       // propagation phase
       if (setWrites.nonEmpty) {
-        val noChanges = if (admissionResult.isFailure) {
-          setWrites
-        } else {
-          for (change <- admissionTicket.initialChanges) {
-            val res = change.v(
-              if (change.r.state.asInstanceOf[NodeVersionHistory[_, _, _, _]].valuePersistency.isTransient) {
-                change.r.state.asInstanceOf[NodeVersionHistory[change.r.Value, _, _, _]].valuePersistency.initialValue
-              } else {
-                change.r.state.dynamicBefore(turn)
-              })
-            val notificationResult = change.r.state.notify(turn, changed = true)
-            assert(notificationResult == GlitchFreeReady)
-            val reevOutResult = change.r.state.reevOut(turn, if (res.valueChanged) Some(res.value) else None)
-            reevOutResult match {
-              case NoSuccessor(out) =>
-                for (succ <- out) turn.taskQueue.offer(Notification(turn, succ, res.valueChanged))
-              case FollowFraming(out, succTxn: FullMVTurn) =>
-                for (succ <- out) turn.taskQueue.offer(NotificationWithFollowFrame(turn, succ, res.valueChanged, succTxn))
-              case otherwise => throw new AssertionError("Source reevaluation should not be able to yield " + otherwise)
-            }
-          }
-          setWrites.diff(admissionTicket.initialChanges.map(_.r).toSet)
-        }
-        for (i <- noChanges) {
-          val notificationResult = i.state.notify(turn, changed = false)
-          notificationResult match {
-            case NoSuccessor(out) =>
-              for (succ <- out) turn.taskQueue.offer(Notification(turn, succ, changed = false))
-            case FollowFraming(out, succTxn: FullMVTurn) =>
-              for (succ <- out) turn.taskQueue.offer(NotificationWithFollowFrame(turn, succ, changed = false, succTxn))
-            case otherwise => throw new AssertionError("Source reevaluation should not be able to yield " + otherwise)
-          }
+        turn.initialChanges = admissionTicket.initialChanges
+        for(write <- setWrites) {
+          turn.offer(SourceNotification(turn, write, admissionResult.isSuccess && admissionTicket.initialChanges.contains(write)))
         }
       }
 

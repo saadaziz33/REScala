@@ -14,16 +14,16 @@ trait FramingTask extends FullMVAction {
       case FramingBranchEnd =>
         Traversable.empty
       case Frame(out, maybeOtherTurn) =>
-        for(dep <- out) maybeOtherTurn.taskQueue.offer(Framing(maybeOtherTurn, dep))
+        for(dep <- out) maybeOtherTurn.offer(Framing(maybeOtherTurn, dep))
         if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
       case Deframe(out, maybeOtherTurn) =>
-        for(dep <- out) maybeOtherTurn.taskQueue.offer(Deframing(maybeOtherTurn, dep))
+        for(dep <- out) maybeOtherTurn.offer(Deframing(maybeOtherTurn, dep))
         if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
       case FrameSupersede(out, maybeOtherTurn, supersede) =>
-        for(dep <- out) maybeOtherTurn.taskQueue.offer(SupersedeFraming(maybeOtherTurn, dep, supersede))
+        for(dep <- out) maybeOtherTurn.offer(SupersedeFraming(maybeOtherTurn, dep, supersede))
         if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
       case DeframeReframe(out, maybeOtherTurn, reframe) =>
-        for(dep <- out) maybeOtherTurn.taskQueue.offer(DeframeReframing(maybeOtherTurn, dep, reframe))
+        for(dep <- out) maybeOtherTurn.offer(DeframeReframing(maybeOtherTurn, dep, reframe))
         if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
     }
   }

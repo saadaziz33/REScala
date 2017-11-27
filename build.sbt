@@ -136,7 +136,7 @@ lazy val caseStudyRSSSimple = project.in(file("Examples/RSSReader/SimpleRssReade
   .settings(cfg.base, name := "rssreader-case-study-simple", lib.rss, cfg.noPublish, cfg.test)
 
 lazy val universe = project.in(file("Examples/Universe"))
-  .dependsOn(rescalaJVM)
+  .dependsOn(rescalaJVM, stm, fullmv)
   .settings(cfg.base, cfg.noPublish, name := "rescala-universe", com.typesafe.sbt.SbtStartScript.startScriptForClassesSettings)
 
 lazy val caseStudyShapes = project.in(file("Examples/Shapes"))

@@ -15,12 +15,7 @@ class FullMVTurnTransitiveReachabilityTest extends FunSuite {
     for((from, tos) <- edges; to <- tos) {
       val fromTree = trees(from)
       val toTree = trees(to)
-      if(!fromTree.isTransitivePredecessor(toTree)) {
-        val (_, toTreeRoot) = toTree.acquirePhaseLockAndGetEstablishmentBundle()
-        fromTree.acquirePhaseLockAndGetEstablishmentBundle()
-        fromTree.addPredecessorAndReleasePhaseLock(toTreeRoot)
-        toTree.asyncReleasePhaseLock()
-      }
+      if(!fromTree.isTransitivePredecessor(toTree)) fromTree.addPredecessor(toTree.selfNode)
     }
 
     var transitiveClosure = edges

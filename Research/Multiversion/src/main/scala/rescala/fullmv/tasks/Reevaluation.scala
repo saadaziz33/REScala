@@ -2,14 +2,14 @@ package rescala.fullmv.tasks
 
 import java.util.concurrent.locks.LockSupport
 
-import rescala.core.{Pulse, Reactive, ReevaluationResult}
+import rescala.core.{Pulse, ReSource, Reactive, ReevaluationResult}
 import rescala.fullmv.NotificationResultAction.{Glitched, ReevOutResult}
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{FollowFraming, NextReevaluation, NoSuccessor}
 import rescala.fullmv._
 
-case class Reevaluation(turn: FullMVTurn, node: Reactive[FullMVStruct]) extends FullMVAction {
+case class Reevaluation(override val turn: FullMVTurn, override val node: Reactive[FullMVStruct]) extends FullMVAction with ReevaluationResultHandling[Reactive[FullMVStruct]] {
   override def doCompute(): Unit = {
-    assert(turn.phase == TurnPhase.Executing, s"$this cannot reevaluate (requires executing phase")
+    assert(turn.phase == TurnPhase.Executing, s"$turn cannot reevaluate (requires executing phase")
     val res: ReevaluationResult[node.Value, FullMVStruct] = try {
       node.reevaluate(turn, node.state.reevIn(turn), node.state.incomings)
     } catch {
@@ -19,27 +19,50 @@ case class Reevaluation(turn: FullMVTurn, node: Reactive[FullMVStruct]) extends 
         ReevaluationResult.Static[Nothing, FullMVStruct](Pulse.NoChange, node.state.incomings).asInstanceOf[ReevaluationResult[node.Value, FullMVStruct]]
     }
     res.commitDependencyDiff(turn, node)
+    processReevaluationResult(res)
+  }
+
+  override def createReevaluation(succTxn: FullMVTurn) = Reevaluation(succTxn, node)
+}
+
+case class SourceReevaluation(override val turn: FullMVTurn, override val node: ReSource[FullMVStruct]) extends FullMVAction with ReevaluationResultHandling[ReSource[FullMVStruct]] {
+  override def doCompute(): Unit = {
+    assert(turn.phase == TurnPhase.Executing, s"$turn cannot source-reevaluate (requires executing phase")
+    val ic = turn.initialChanges(node)
+    assert(ic.r == node, s"$turn initial change map broken?")
+    val res = ic.v(ic.r.state.reevIn(turn)).asInstanceOf[ReevaluationResult[node.Value, FullMVStruct]]
+    processReevaluationResult(res)
+  }
+
+  override def createReevaluation(succTxn: FullMVTurn): FullMVAction = SourceReevaluation(succTxn, node)
+}
+
+trait ReevaluationResultHandling[N <: ReSource[FullMVStruct]] extends ReevOutResultHandling[N] {
+  def processReevaluationResult(res: ReevaluationResult[node.Value, FullMVStruct]): Unit = {
     if(res.valueChanged) {
-      Reevaluation.processReevaluationResult(node, turn, node.state.reevOut(turn, if (res.valueChanged) Some(res.value) else None), changed = true)
+      processReevOutResult(node.state.reevOut(turn, if (res.valueChanged) Some(res.value) else None), changed = true)
     } else {
-      Reevaluation.processReevaluationResult(node, turn, node.state.reevOut(turn, None), changed = false)
+      processReevOutResult(node.state.reevOut(turn, None), changed = false)
     }
   }
 }
 
-object Reevaluation {
-  def processReevaluationResult(node: Reactive[FullMVStruct], turn: FullMVTurn, outAndSucc: ReevOutResult[FullMVTurn, Reactive[FullMVStruct]], changed: Boolean): Unit = {
+trait ReevOutResultHandling[N <: ReSource[FullMVStruct]] extends FullMVAction {
+  val node: ReSource[FullMVStruct]
+  def createReevaluation(succTxn: FullMVTurn): FullMVAction
+
+  def processReevOutResult(outAndSucc: ReevOutResult[FullMVTurn, Reactive[FullMVStruct]], changed: Boolean): Unit = {
     if(FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] Reevaluation($turn,$node) => ${if(changed) "changed" else "unchanged"} $outAndSucc")
     outAndSucc match {
       case Glitched =>
         // do nothing, reevaluation will be repeated at a later point
       case NoSuccessor(out) =>
-        for(dep <- out) turn.taskQueue.offer(Notification(turn, dep, changed))
+        for(dep <- out) turn.offer(Notification(turn, dep, changed))
       case FollowFraming(out, succTxn) =>
-        for(dep <- out) turn.taskQueue.offer(NotificationWithFollowFrame(turn, dep, changed, succTxn))
+        for(dep <- out) turn.offer(NotificationWithFollowFrame(turn, dep, changed, succTxn))
       case NextReevaluation(out, succTxn) =>
-        for(dep <- out) turn.taskQueue.offer(NotificationWithFollowFrame(turn, dep, changed, succTxn))
-        succTxn.taskQueue.offer(Reevaluation(succTxn, node))
+        for(dep <- out) turn.offer(NotificationWithFollowFrame(turn, dep, changed, succTxn))
+        succTxn.offer(createReevaluation(succTxn))
         LockSupport.unpark(succTxn.userlandThread)
     }
   }

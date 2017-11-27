@@ -949,8 +949,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       version.changed = 0
       latestReevOut = position
       val stabilizeTo = if (maybeValue.isDefined) {
-        latestValue = maybeValue.get
-        if(latestValue.isInstanceOf[Exceptional]){
+        if(!valuePersistency.isTransient) latestValue = maybeValue.get
+        if(FullMVEngine.DEBUG && latestValue.isInstanceOf[Exceptional]){
           println(s"[${Thread.currentThread().getName}] WARNING: glitch free evaluation result is exceptional:")
           latestValue.asInstanceOf[Exceptional].throwable.printStackTrace()
         }
@@ -1124,7 +1124,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       // executing this then-ready reevaluation, but for now the version is guaranteed not stable yet.
       version.pending += arity
     }
-    assertOptimizationsIntegrity(s"retrofitSinkFrames(writes=$successorWrittenVersions, maybeFrame=$maybeSuccessorFrame)")
+    // cannot make this assertion here because dynamic events might make the firstFrame not a frame when dropping the only incoming changed dependency..
+    //assertOptimizationsIntegrity(s"retrofitSinkFrames(writes=$successorWrittenVersions, maybeFrame=$maybeSuccessorFrame)")
   }
 
   /**

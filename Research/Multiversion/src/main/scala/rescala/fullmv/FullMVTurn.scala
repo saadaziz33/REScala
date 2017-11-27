@@ -12,7 +12,13 @@ import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
 
 class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends TurnImpl[FullMVStruct] {
+  var initialChanges: collection.Map[ReSource[FullMVStruct], InitialChange[FullMVStruct]] = _
+
   val taskQueue = new ConcurrentLinkedQueue[FullMVAction]()
+  def offer(action: FullMVAction): Unit = {
+    assert(action.turn == this, s"$this received task of different turn: $action")
+    taskQueue.offer(action)
+  }
   val waiters = new ConcurrentHashMap[Thread, TurnPhase.Type]()
 
   private val hc = ThreadLocalRandom.current().nextInt()
@@ -145,7 +151,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================ToString============================================================
 
-  override def toString: String = s"FullMVTurn($hc, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
+  override def toString: String = s"FullMVTurn($hc by ${userlandThread.getName}, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
 
   //========================================================Scheduler Interface============================================================
 
@@ -185,7 +191,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
         Reevaluation(this, reactive).compute()
       case NextReevaluation(out, succTxn) if out.isEmpty =>
         if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive spawned reevaluation for successor $succTxn.")
-        succTxn.taskQueue.offer(Reevaluation(succTxn, reactive))
+        succTxn.offer(Reevaluation(succTxn, reactive))
         succTxn.notify()
       case otherOut: NotificationOutAndSuccessorOperation[FullMVTurn, Reactive[FullMVStruct]] if otherOut.out.isEmpty =>
         // ignore
@@ -197,14 +203,14 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   override private[rescala] def discover(node: ReSource[FullMVStruct], addOutgoing: Reactive[FullMVStruct]): Unit = {
     val r@(successorWrittenVersions, maybeFollowFrame) = node.state.discover(this, addOutgoing)
-    assert(!(successorWrittenVersions ++ maybeFollowFrame).exists(isTransitivePredecessor), s"$this retrofitting contains predecessors: discover $node -> $addOutgoing retrofits $r from ${node.state}")
+    assert((successorWrittenVersions ++ maybeFollowFrame).forall(retrofit => retrofit == this || retrofit.isTransitivePredecessor(this)), s"$this retrofitting contains predecessors: discover $node -> $addOutgoing retrofits $r from ${node.state}")
     if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] Reevaluation($this,$addOutgoing) discovering $node -> $addOutgoing re-queueing $successorWrittenVersions and re-framing $maybeFollowFrame")
     addOutgoing.state.retrofitSinkFrames(successorWrittenVersions, maybeFollowFrame, 1)
   }
 
   override private[rescala] def drop(node: ReSource[FullMVStruct], removeOutgoing: Reactive[FullMVStruct]): Unit = {
     val r@(successorWrittenVersions, maybeFollowFrame) = node.state.drop(this, removeOutgoing)
-    assert(!(successorWrittenVersions ++ maybeFollowFrame).exists(isTransitivePredecessor), s"$this retrofitting contains predecessors: drop $node -> $removeOutgoing retrofits $r from ${node.state}")
+    assert((successorWrittenVersions ++ maybeFollowFrame).forall(retrofit => retrofit == this || retrofit.isTransitivePredecessor(this)), s"$this retrofitting contains predecessors: drop $node -> $removeOutgoing retrofits $r from ${node.state}")
     if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] Reevaluation($this,$removeOutgoing) dropping $node -> $removeOutgoing de-queueing $successorWrittenVersions and de-framing $maybeFollowFrame")
     removeOutgoing.state.retrofitSinkFrames(successorWrittenVersions, maybeFollowFrame, -1)
   }
