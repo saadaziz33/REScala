@@ -1025,7 +1025,11 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     */
   override def dynamicBefore(txn: T): V = {
     assert(!valuePersistency.isTransient, s"$txn invoked dynamicBefore on transient node")
-    val version = synchronized { _versions(ensureReadVersion(txn)._1) }
+    val version = synchronized {
+      val pos = ensureReadVersion(txn)._1
+      // DO NOT INLINE THIS! it breaks the code! see https://scastie.scala-lang.org/briJDRO3RCmIMEd1zApmBQ
+      _versions(pos)
+    }
     if(!version.isStable) version.blockForStable()
     version.lastWrittenPredecessorIfStable.value.get
   }
@@ -1050,7 +1054,10 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     *         transaction's own write if one has occurred or will occur.
     */
   override def dynamicAfter(txn: T): V = {
-    val version = synchronized { _versions(ensureReadVersion(txn)._1) }
+    val version = synchronized {
+      val pos = ensureReadVersion(txn)._1
+      // DO NOT INLINE THIS! it breaks the code! see https://scastie.scala-lang.org/briJDRO3RCmIMEd1zApmBQ
+      _versions(pos) }
     if(!version.isStable) version.blockForStable()
     if(!version.isFinal) latestValue else
 //    if(!version.isFinal) throw new AssertionError("currently not supported")
