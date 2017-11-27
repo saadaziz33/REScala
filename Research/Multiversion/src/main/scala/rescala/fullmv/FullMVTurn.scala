@@ -169,6 +169,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   }
 
   override def ignite(reactive: Reactive[FullMVStruct], incoming: Set[ReSource[FullMVStruct]], ignitionRequiresReevaluation: Boolean): Unit = {
+    assert(Thread.currentThread() == userlandThread, s"$this ignition of $reactive on different thread ${Thread.currentThread().getName}")
     if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this igniting $reactive on $incoming")
     incoming.foreach { discover =>
       discover.state.dynamicAfter(this) // TODO should we get rid of this?
@@ -192,7 +193,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
       case NextReevaluation(out, succTxn) if out.isEmpty =>
         if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive spawned reevaluation for successor $succTxn.")
         succTxn.offer(Reevaluation(succTxn, reactive))
-        succTxn.notify()
+        LockSupport.unpark(succTxn.userlandThread)
       case otherOut: NotificationOutAndSuccessorOperation[FullMVTurn, Reactive[FullMVStruct]] if otherOut.out.isEmpty =>
         // ignore
       case other =>

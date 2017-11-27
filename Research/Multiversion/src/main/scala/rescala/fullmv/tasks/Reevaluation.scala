@@ -9,6 +9,7 @@ import rescala.fullmv._
 
 case class Reevaluation(override val turn: FullMVTurn, override val node: Reactive[FullMVStruct]) extends FullMVAction with ReevaluationResultHandling[Reactive[FullMVStruct]] {
   override def doCompute(): Unit = {
+    assert(Thread.currentThread() == turn.userlandThread, s"$this on different thread ${Thread.currentThread().getName}")
     assert(turn.phase == TurnPhase.Executing, s"$turn cannot reevaluate (requires executing phase")
     val res: ReevaluationResult[node.Value, FullMVStruct] = try {
       node.reevaluate(turn, node.state.reevIn(turn), node.state.incomings)
@@ -27,6 +28,7 @@ case class Reevaluation(override val turn: FullMVTurn, override val node: Reacti
 
 case class SourceReevaluation(override val turn: FullMVTurn, override val node: ReSource[FullMVStruct]) extends FullMVAction with ReevaluationResultHandling[ReSource[FullMVStruct]] {
   override def doCompute(): Unit = {
+    assert(Thread.currentThread() == turn.userlandThread, s"$this on different thread ${Thread.currentThread().getName}")
     assert(turn.phase == TurnPhase.Executing, s"$turn cannot source-reevaluate (requires executing phase")
     val ic = turn.initialChanges(node)
     assert(ic.r == node, s"$turn initial change map broken?")

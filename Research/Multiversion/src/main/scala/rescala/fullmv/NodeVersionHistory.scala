@@ -1,6 +1,5 @@
 package rescala.fullmv
 
-import java.util.concurrent.ForkJoinPool
 import java.util.concurrent.ForkJoinPool.ManagedBlocker
 import java.util.concurrent.locks.LockSupport
 
@@ -19,6 +18,10 @@ object FramingBranchResult {
   case class FrameSupersede[T, R](out: Set[R], frame: T, supersede: T) extends FramingBranchResult[T, R]
   case class Deframe[T, R](out: Set[R], deframe: T) extends FramingBranchResult[T, R]
   case class DeframeReframe[T, R](out: Set[R], deframe: T, reframe: T) extends FramingBranchResult[T, R]
+}
+
+trait MyManagedBlocker extends ManagedBlocker {
+  def apply(): Unit = while(!isReleasable() && !block()) {}
 }
 
 sealed trait NotificationResultAction[+T, +R]
@@ -54,7 +57,7 @@ object NotificationResultAction {
   * @tparam OutDep the type of outgoing dependency nodes
   */
 class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePersistency: ValuePersistency[V]) extends FullMVState[V, T, InDep, OutDep] {
-  class Version(val txn: T, @volatile var lastWrittenPredecessorIfStable: Version, var out: Set[OutDep], var pending: Int, var changed: Int, @volatile var value: Option[V]) extends ManagedBlocker {
+  class Version(val txn: T, @volatile var lastWrittenPredecessorIfStable: Version, var out: Set[OutDep], var pending: Int, var changed: Int, @volatile var value: Option[V]) extends MyManagedBlocker {
     // txn >= Executing, stable == true, node reevaluation completed changed
     def isWritten: Boolean = changed == 0 && value.isDefined
     // txn <= WrapUp, any following versions are stable == false
@@ -99,14 +102,14 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     override def isReleasable: Boolean = isFinal
 
     // common blocking case (now, dynamicDepend): Use self as blocker instance to reduce garbage
-    def blockForFinal: ManagedBlocker = this
+    def blockForFinal: MyManagedBlocker = this
 
     // less common blocking case
     // fake lazy val without synchronization, because it is accessed only while the node's monitor is being held.
-    private var _blockForStable: ManagedBlocker = null
-    def blockForStable: ManagedBlocker = {
+    private var _blockForStable: MyManagedBlocker = null
+    def blockForStable: MyManagedBlocker = {
       if(_blockForStable == null) {
-        _blockForStable = new ManagedBlocker {
+        _blockForStable = new MyManagedBlocker {
           override def block(): Boolean = {
             stableWaiters += 1
             assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
@@ -627,6 +630,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         case otherwise =>
           if (attemptPredecessor.phase == TurnPhase.Completed) {
             assert(predPos >= 0, s"supposed-to-be predecessor $attemptPredecessor completed this having been assumed impossible")
+            if(predPos < 0) throw new AssertionError(s"supposed-to-be predecessor $attemptPredecessor completed this having been assumed impossible")
             latestGChint = predPos
 //            SerializationGraphTracking.abortContending()
             (Succeeded, sccState)
@@ -675,6 +679,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         case otherwise =>
           if (predecessor.phase == TurnPhase.Completed) {
             assert(predPos >= 0, s"supposed-to-be predecessor $predecessor completed this having been assumed impossible")
+            if(predPos < 0) throw new AssertionError(s"supposed-to-be predecessor $predecessor completed this having been assumed impossible")
             latestGChint = predPos
 //            SerializationGraphTracking.abortContending()
             sccState
@@ -711,6 +716,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       if (tree == null) {
         assert(predecessor.phase == TurnPhase.Completed, s"$predecessor selfNode was null but isn't completed?")
         assert(predPos >= 0, s"supposed-to-be predecessor $predecessor completed this having been assumed impossible")
+        if(predPos < 0) throw new AssertionError(s"supposed-to-be predecessor $predecessor completed this having been assumed impossible")
         latestGChint = predPos
       } else {
         successor.addPredecessor(tree)
@@ -1020,7 +1026,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   override def dynamicBefore(txn: T): V = {
     assert(!valuePersistency.isTransient, s"$txn invoked dynamicBefore on transient node")
     val version = synchronized { _versions(ensureReadVersion(txn)._1) }
-    if(!version.isStable) ForkJoinPool.managedBlock(version.blockForStable)
+    if(!version.isStable) version.blockForStable()
     version.lastWrittenPredecessorIfStable.value.get
   }
 
@@ -1045,10 +1051,10 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     */
   override def dynamicAfter(txn: T): V = {
     val version = synchronized { _versions(ensureReadVersion(txn)._1) }
-    if(!version.isStable) ForkJoinPool.managedBlock(version.blockForStable)
+    if(!version.isStable) version.blockForStable()
     if(!version.isFinal) latestValue else
 //    if(!version.isFinal) throw new AssertionError("currently not supported")
-//    if(!version.isFinal) ForkJoinPool.managedBlock(version.blockForFinal)
+//    if(!version.isFinal) version.blockForFinal()
     if (version.value.isDefined) {
       version.value.get
     } else if(valuePersistency.isTransient) {
