@@ -2,9 +2,6 @@
 # Job name
 #SBATCH -J universe-locksweep
 #
-# array config
-#SBATCH -a 1-16
-#
 # output file
 #SBATCH -o universe-locksweep-%j.txt
 #
@@ -18,7 +15,7 @@
 #SBATCH -C avx&mpi
 #
 # Request vitual memory you need for your job in MB
-#SBATCH --mem 2048
+#SBATCH --mem-per-cpu 128
 #
 # Number of tasks
 #SBATCH -n 1
@@ -39,5 +36,5 @@ java -version
 echo "---------------------------------------------"
 
 export LANG=en_US.UTF-8
-export JAVA_OPTS="-Xmx1024m -Xms1024m -DengineName=parrp"
+export JAVA_OPTS="-Xmx1024m -Xms1024m -DengineName=locksweep"
 ./target/start

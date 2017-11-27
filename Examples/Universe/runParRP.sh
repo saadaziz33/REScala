@@ -2,9 +2,6 @@
 # Job name
 #SBATCH -J universe-parrp
 #
-# array config
-#SBATCH -a 1-16
-#
 # output file
 #SBATCH -o universe-parrp-%j.txt
 #
@@ -18,7 +15,7 @@
 #SBATCH -C avx&mpi
 #
 # Request vitual memory you need for your job in MB
-#SBATCH --mem 2048
+#SBATCH --mem-per-cpu 128
 #
 # Number of tasks
 #SBATCH -n 1
