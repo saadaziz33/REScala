@@ -20,10 +20,6 @@ object FramingBranchResult {
   case class DeframeReframe[T, R](out: Set[R], deframe: T, reframe: T) extends FramingBranchResult[T, R]
 }
 
-trait MyManagedBlocker extends ManagedBlocker {
-  def apply(): Unit = while(!isReleasable() && !block()) {}
-}
-
 sealed trait NotificationResultAction[+T, +R]
 object NotificationResultAction {
   // upon notify:
@@ -57,7 +53,7 @@ object NotificationResultAction {
   * @tparam OutDep the type of outgoing dependency nodes
   */
 class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePersistency: ValuePersistency[V]) extends FullMVState[V, T, InDep, OutDep] {
-  class Version(val txn: T, @volatile var lastWrittenPredecessorIfStable: Version, var out: Set[OutDep], var pending: Int, var changed: Int, @volatile var value: Option[V]) extends MyManagedBlocker {
+  class Version(val txn: T, @volatile var lastWrittenPredecessorIfStable: Version, var out: Set[OutDep], var pending: Int, var changed: Int, @volatile var value: Option[V]) /*extends MyManagedBlocker*/ {
     // txn >= Executing, stable == true, node reevaluation completed changed
     def isWritten: Boolean = changed == 0 && value.isDefined
     // txn <= WrapUp, any following versions are stable == false
@@ -85,46 +81,50 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       value.get
     }
 
-    @volatile var finalWaiters: Int = 0
+//    @volatile var finalWaiters: Int = 0
     @volatile var stableWaiters: Int = 0
-    override def block(): Boolean = {
-      finalWaiters += 1
-      assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
-      if(!isReleasable) {
-        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] parking for final $this.")
-        LockSupport.park(NodeVersionHistory.this)
-        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparked on $this.")
-      }
-      finalWaiters -= 1
-      isReleasable
-    }
-
-    override def isReleasable: Boolean = isFinal
+//    override def blockForFinal(): Boolean = {
+//      finalWaiters += 1
+//      assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
+//      if(!isReleasable) {
+//        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] parking for final $this.")
+//        LockSupport.park(NodeVersionHistory.this)
+//        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparked on $this.")
+//      }
+//      finalWaiters -= 1
+//      isReleasable
+//    }
+//
+//    override def isReleasable: Boolean = isFinal
 
     // common blocking case (now, dynamicDepend): Use self as blocker instance to reduce garbage
-    def blockForFinal: MyManagedBlocker = this
+//    def blockForFinal: MyManagedBlocker = this
 
     // less common blocking case
     // fake lazy val without synchronization, because it is accessed only while the node's monitor is being held.
-    private var _blockForStable: MyManagedBlocker = null
-    def blockForStable: MyManagedBlocker = {
-      if(_blockForStable == null) {
-        _blockForStable = new MyManagedBlocker {
-          override def block(): Boolean = {
-            stableWaiters += 1
-            assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
-            if(!isReleasable) {
-              if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] parking for stable ${Version.this}")
-              LockSupport.park(NodeVersionHistory.this)
-              if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparked on ${Version.this}")
-            }
-            stableWaiters -= 1
-            isReleasable
-          }
-          override def isReleasable: Boolean = isStable
+    def blockForStable(): Unit = {
+      if (!isStable) {
+        //    private var _blockForStable: MyManagedBlocker = null
+        //    def blockForStable: MyManagedBlocker = {
+        //      if(_blockForStable == null) {
+        //        _blockForStable = new MyManagedBlocker {
+        //          override def block(): Boolean = {
+        stableWaiters += 1
+        assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
+        if (!isStable) {
+          if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] parking for stable ${Version.this}")
+          LockSupport.park(NodeVersionHistory.this)
+          if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparked on ${Version.this}")
         }
+        stableWaiters -= 1
+        //            isReleasable
+        //          }
+        //          override def isReleasable: Boolean = isStable
+        //        }
+        //      }
+        //      _blockForStable
+        //    }
       }
-      _blockForStable
     }
 
 
@@ -843,10 +843,10 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
 
   @tailrec private def stabilizeForwardsUntilFrame(stabilizeTo: Version): Unit = {
     val finalized = _versions(firstFrame)
-    if(finalized.finalWaiters > 0) {
-      if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparking ${finalized.txn.userlandThread.getName} after finalized $finalized.")
-      LockSupport.unpark(finalized.txn.userlandThread)
-    }
+//    if(finalized.finalWaiters > 0) {
+//      if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparking ${finalized.txn.userlandThread.getName} after finalized $finalized.")
+//      LockSupport.unpark(finalized.txn.userlandThread)
+//    }
     firstFrame += 1
     if (firstFrame < size) {
       val stabilized = _versions(firstFrame)
