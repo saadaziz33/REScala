@@ -1,6 +1,6 @@
 package rescala.fullmv
 
-import java.util.concurrent.ForkJoinPool.ManagedBlocker
+//import java.util.concurrent.ForkJoinPool.ManagedBlocker
 import java.util.concurrent.locks.LockSupport
 
 import rescala.core.Pulse.Exceptional
@@ -111,7 +111,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         //          override def block(): Boolean = {
         stableWaiters += 1
         assert(Thread.currentThread() == txn.userlandThread, s"this assertion is only valid without a threadpool .. otherwise it should be txn==txn, but that would require txn to be spliced in here which is annoying while using the managedblocker interface")
-        if (!isStable) {
+        while (!isStable) {
           if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] parking for stable ${Version.this}")
           LockSupport.park(NodeVersionHistory.this)
           if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparked on ${Version.this}")
@@ -842,7 +842,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   @tailrec private def stabilizeForwardsUntilFrame(stabilizeTo: Version): Unit = {
-    val finalized = _versions(firstFrame)
+//    val finalized = _versions(firstFrame)
 //    if(finalized.finalWaiters > 0) {
 //      if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] unparking ${finalized.txn.userlandThread.getName} after finalized $finalized.")
 //      LockSupport.unpark(finalized.txn.userlandThread)
