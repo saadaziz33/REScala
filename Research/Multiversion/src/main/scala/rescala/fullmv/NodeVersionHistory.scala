@@ -934,7 +934,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   override def reevIn(turn: T): V = {
-    synchronized { assert(_versions(firstFrame).txn == turn, s"Turn $turn called reevIn, but Turn ${_versions(firstFrame).txn} is first frame owner") }
+    assert(synchronized {_versions(firstFrame).txn == turn }, s"$turn called reevIn, but is not first frame owner in $this")
     latestValue
   }
 

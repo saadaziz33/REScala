@@ -1,5 +1,6 @@
 package rescala.fullmv
 
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.{LockSupport, ReentrantReadWriteLock}
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ThreadLocalRandom}
 
@@ -33,12 +34,22 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================Local State Control============================================================
 
+  var framingRestarts: Int = 0
+  var executingRestarts: Int = 0
+
   def awaitAndSwitchPhase(newPhase: TurnPhase.Type): Unit = {
     assert(newPhase > this.phase, s"$this cannot progress backwards to phase $newPhase.")
     @inline @tailrec def awaitAndSwitchPhase0(firstUnknownPredecessorIndex: Int, maybeCurrentUnknownPredecessor: FullMVTurn): Unit = {
       val head = taskQueue.poll()
       if (head != null) {
-        if (maybeCurrentUnknownPredecessor != null) maybeCurrentUnknownPredecessor.waiters.remove(this.userlandThread)
+        if (maybeCurrentUnknownPredecessor != null) {
+          maybeCurrentUnknownPredecessor.waiters.remove(this.userlandThread)
+          if(phase == TurnPhase.Framing) {
+            framingRestarts += 1
+          } else {
+            executingRestarts += 1
+          }
+        }
         assert(head.turn == this, s"task queue of $this contains different turn's $head")
         head.compute()
         awaitAndSwitchPhase0(firstUnknownPredecessorIndex, null)
@@ -61,6 +72,20 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
           if (newPhase == TurnPhase.Completed) {
             predecessorSpanningTreeNodes = Map.empty
             selfNode = null
+
+            val contained1 = FullMVTurn.framingStats.get(framingRestarts)
+            if(contained1 == null) {
+              val put = new AtomicLong()
+              val prev = FullMVTurn.framingStats.putIfAbsent(framingRestarts, put)
+              if(prev == null) put else prev
+            } else { contained1 }.getAndIncrement()
+
+            val contained2 = FullMVTurn.executingStats.get(executingRestarts)
+            if(contained2 == null) {
+              val put = new AtomicLong()
+              val prev = FullMVTurn.executingStats.putIfAbsent(executingRestarts, put)
+              if(prev == null) put else prev
+            } else { contained2 }.getAndIncrement()
           }
           if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this switched phase.")
         } else {
@@ -224,4 +249,9 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   override private[rescala] def dynamicAfter[P](reactive: ReSourciV[P, FullMVStruct]) = reactive.state.dynamicAfter(this)
 
   override def observe(f: () => Unit): Unit = f()
+}
+
+object FullMVTurn {
+  val framingStats = new ConcurrentHashMap[Int, AtomicLong]()
+  val executingStats = new ConcurrentHashMap[Int, AtomicLong]()
 }
