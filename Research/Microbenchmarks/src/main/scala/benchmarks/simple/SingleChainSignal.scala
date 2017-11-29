@@ -34,19 +34,19 @@ class SingleChainSignal[S <: Struct] extends BusyThreads {
   @Benchmark
   def run(step: Step): Unit = source.set(step.run())
 
-  @TearDown(Level.Trial) def printStats(): Unit = {
+  @TearDown(Level.Trial) def printStats(p: BenchmarkParams): Unit = {
     println()
-    println(s"Phase\tRestarts\tCount")
+    println(s"Threads\tPhase\tRestarts\tCount")
     val it1 = FullMVTurn.framingStats.entrySet().iterator()
     while(it1.hasNext) {
       val entry = it1.next()
-      println(s"Framing\t${entry.getKey}\t${entry.getValue.get}")
+      println(s"${p.getThreads}\tFraming\t${entry.getKey}\t${entry.getValue.get}")
     }
     FullMVTurn.framingStats.clear()
     val it2 = FullMVTurn.executingStats.entrySet().iterator()
     while(it2.hasNext) {
       val entry = it2.next()
-      println(s"Executing\t${entry.getKey}\t${entry.getValue.get}")
+      println(s"${p.getThreads}\tExecuting\t${entry.getKey}\t${entry.getValue.get}")
     }
     FullMVTurn.executingStats.clear()
     println()
