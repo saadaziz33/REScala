@@ -39,11 +39,11 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   def awaitAndSwitchPhase(newPhase: TurnPhase.Type): Unit = {
     assert(newPhase > this.phase, s"$this cannot progress backwards to phase $newPhase.")
-    @inline @tailrec def awaitAndSwitchPhase0(firstUnknownPredecessorIndex: Int, maybeCurrentUnknownPredecessor: FullMVTurn): Unit = {
+    @inline @tailrec def awaitAndSwitchPhase0(firstUnknownPredecessorIndex: Int, spinUntil: Long, registeredForWaiting: FullMVTurn): Unit = {
       val head = taskQueue.poll()
       if (head != null) {
-        if (maybeCurrentUnknownPredecessor != null) {
-          maybeCurrentUnknownPredecessor.waiters.remove(this.userlandThread)
+        if (registeredForWaiting != null) {
+          registeredForWaiting.waiters.remove(this.userlandThread)
           if(phase == TurnPhase.Framing) {
             framingRestarts += 1
           } else {
@@ -52,9 +52,9 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
         }
         assert(head.turn == this, s"task queue of $this contains different turn's $head")
         head.compute()
-        awaitAndSwitchPhase0(firstUnknownPredecessorIndex, null)
+        awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, null)
       } else if (firstUnknownPredecessorIndex == selfNode.size) {
-        assert(maybeCurrentUnknownPredecessor == null, s"$this is still registered on $maybeCurrentUnknownPredecessor as waiter despite having finished waiting for it")
+        assert(registeredForWaiting == null, s"$this is still registered on $registeredForWaiting as waiter despite having finished waiting for it")
         phaseLock.writeLock.lock()
         // make thread-safe sure that we haven't received any new predecessors that might
         // not be in the next phase yet. Only once that's sure we can also thread-safe sure
@@ -90,28 +90,34 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
           if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this switched phase.")
         } else {
           phaseLock.writeLock.unlock()
-          awaitAndSwitchPhase0(firstUnknownPredecessorIndex, maybeCurrentUnknownPredecessor)
+          awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, null)
         }
       } else {
-        val currentUnknownPredecessor = if (maybeCurrentUnknownPredecessor != null) {
-          maybeCurrentUnknownPredecessor
+        val currentUnknownPredecessor = selfNode.children(firstUnknownPredecessorIndex).txn
+        if(currentUnknownPredecessor.phase < newPhase) {
+          if (registeredForWaiting != null) {
+            if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this parking for $currentUnknownPredecessor.")
+            LockSupport.park(currentUnknownPredecessor)
+            if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this unparked.")
+            awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, currentUnknownPredecessor)
+          } else if (spinUntil == 0L) {
+            val newSpinUntil = System.nanoTime() + FullMVTurn.parkAfterSpinThreshold
+            Thread.`yield`()
+            awaitAndSwitchPhase0(firstUnknownPredecessorIndex, newSpinUntil, null)
+          } else if (System.nanoTime() < spinUntil) {
+            Thread.`yield`()
+            awaitAndSwitchPhase0(firstUnknownPredecessorIndex, spinUntil, null)
+          } else {
+            currentUnknownPredecessor.waiters.put(this.userlandThread, newPhase)
+            awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, currentUnknownPredecessor)
+          }
         } else {
-          val p = selfNode.children(firstUnknownPredecessorIndex).txn
-          p.waiters.put(this.userlandThread, newPhase)
-          p
-        }
-        if (currentUnknownPredecessor.phase < newPhase) {
-          if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this parking for $currentUnknownPredecessor.")
-          LockSupport.park(currentUnknownPredecessor)
-          if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this unparked.")
-          awaitAndSwitchPhase0(firstUnknownPredecessorIndex, currentUnknownPredecessor)
-        } else {
-          currentUnknownPredecessor.waiters.remove(this.userlandThread)
-          awaitAndSwitchPhase0(firstUnknownPredecessorIndex + 1, null)
+          if (registeredForWaiting != null) currentUnknownPredecessor.waiters.remove(this.userlandThread)
+          awaitAndSwitchPhase0(firstUnknownPredecessorIndex + 1, 0L, null)
         }
       }
     }
-    awaitAndSwitchPhase0(0, null)
+    awaitAndSwitchPhase0(0, 0L, null)
   }
 
   @tailrec private def awaitBranchCountZero(): Unit = {
@@ -252,6 +258,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 }
 
 object FullMVTurn {
+  val parkAfterSpinThreshold = 100000L // 100ns
   val framingStats = new ConcurrentHashMap[Int, AtomicLong]()
   val executingStats = new ConcurrentHashMap[Int, AtomicLong]()
 }
