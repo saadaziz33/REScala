@@ -172,7 +172,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
 
     assert(latestReevOut >= 0, debugStatement("latest reevout out of bounds negative"))
     assert(latestReevOut < size, debugStatement("latestWritten out of bounds positive"))
-    assert(_versions(latestReevOut).pending == 0 && _versions(latestReevOut).changed == 0 && (latestReevOut == 0 || _versions(latestReevOut).isStable), "latestReevOut points to invalid version")
+    assert(_versions(latestReevOut).pending == 0 && _versions(latestReevOut).changed == 0 && (latestReevOut == 0 || _versions(latestReevOut).isStable), debugStatement("latestReevOut points to invalid version"))
 
     val actualVersions = _versions.take(size)
     val expectedPredecessorWrites: Array[Version] = new Array(actualVersions.length)
@@ -225,6 +225,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   var firstFrame: Int = size
   var latestReevOut: Int = 0
   var latestGChint: Int = 0
+  var lastGCcount: Int = 0
 
   val DEFAULT_MIN_POS = 0
   /**
@@ -233,7 +234,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param txn the transaction
     * @return the position (positive values) or insertion point (negative values)
     */
-  private def getFramePositionFraming(txn: T, minPos: Int = DEFAULT_MIN_POS): (Int, Int) = {
+  private def getFramePositionFraming(txn: T, minPos: Int = DEFAULT_MIN_POS): Int = {
     assert(minPos == DEFAULT_MIN_POS || minPos > math.max(latestGChint, latestReevOut), s"nonsensical minpos $minPos <= max(latestGChint $latestGChint, latestReevOut $latestReevOut)")
     val knownOrderedMinPosIsProvided = minPos != DEFAULT_MIN_POS
     val fromFinal = if (knownOrderedMinPosIsProvided) minPos else math.max(latestGChint, latestReevOut) + 1
@@ -244,7 +245,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       val lastTxn = _versions(size - 1).txn
       if(lastTxn == txn) {
         // shortcut2: last version belongs to one
-        (size - 1, 0)
+        lastGCcount = 0
+        size - 1
       } else {
         val (success, lock) = tryRecordRelationship(lastTxn, size - 1,  txn, lastTxn, txn, UnlockedUnknown)
         val initialSCCState = lock.unlockedIfLocked()
@@ -256,7 +258,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
           if (insertOrFound < 0) {
             arrangeVersionArrayAndCreateVersion(-insertOrFound, txn)
           } else {
-            (insertOrFound, 0)
+            lastGCcount = 0
+            insertOrFound
           }
         }
       }
@@ -305,8 +308,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
           val (insertOrFoundOne, sccState) = findOrPigeonHoleFramingPredictive(one, fromFinal, fromFinalPredecessorRelationIsRecorded = false, lastPos, initialSCCState)
           if(insertOrFoundOne >= 0) {
             // first one found: defer to just look for the second alone
-            val (insertOrFoundTwo, gcd) = getFramePositionFraming(two, insertOrFoundOne + 1)
-            (insertOrFoundOne - gcd, insertOrFoundTwo)
+            val insertOrFoundTwo = getFramePositionFraming(two, insertOrFoundOne + 1)
+            (insertOrFoundOne - lastGCcount, insertOrFoundTwo)
           } else {
             // first one not found:
             val insertOne = -insertOrFoundOne
@@ -315,8 +318,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
             } else {
               val (insertOrFoundTwo, _) = findOrPigeonHoleFramingPredictive(two, insertOne, fromFinalPredecessorRelationIsRecorded = true, size, sccState)
               if (insertOrFoundTwo >= 0) {
-                val (first, gcd) = arrangeVersionArrayAndCreateVersion(insertOne, one)
-                (first, insertOrFoundTwo - gcd + 1)
+                val first = arrangeVersionArrayAndCreateVersion(insertOne, one)
+                (first, insertOrFoundTwo - lastGCcount + 1)
               } else {
                 arrangeVersionArrayAndCreateVersions(insertOne, one, -insertOrFoundTwo, two)
               }
@@ -327,7 +330,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     }
   }
 
-  private def getFramePositionPropagating(txn: T, minPos: Int = firstFrame): (Int, Int) = {
+  private def getFramePositionPropagating(txn: T, minPos: Int = firstFrame): Int = {
     assert(minPos >= firstFrame, s"nonsensical minpos $minPos < firstFrame $firstFrame")
     assert(firstFrame < size, s"a propagating turn may not have a version when looking for a frame, but there must be *some* frame.")
     if(minPos == size) {
@@ -335,7 +338,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       arrangeVersionArrayAndCreateVersion(minPos, txn)
     } else if (_versions(minPos).txn == txn) {
       // common-case shortcut attempt: receive notification for firstFrame
-      (minPos, 0)
+      lastGCcount = 0
+      minPos
     } else {
       assert(minPos == firstFrame || txn.isTransitivePredecessor(_versions(minPos - 1).txn), s"minPos $minPos was given for $txn, which should have the predecessor version's ${_versions(minPos - 1).txn} as predecessor transaction, but had not")
       assert(minPos > firstFrame || txn.isTransitivePredecessor(_versions(firstFrame).txn), s"propagating $txn at minPos $minPos assumes it has a frame but is not ordered after the firstFrame ${_versions(firstFrame).txn} in $this")
@@ -343,7 +347,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       if (insertOrFound < 0) {
         arrangeVersionArrayAndCreateVersion(-insertOrFound, txn)
       } else {
-        (insertOrFound, 0)
+        lastGCcount = 0
+        insertOrFound
       }
     }
   }
@@ -353,14 +358,14 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     if (_versions(firstFrame).txn == one) {
       // common-case shortcut attempt: receive notification for firstFrame
       val foundOne = firstFrame
-      val (insertOrFoundTwo, gcd) = getFramePositionPropagating(two, firstFrame + 1)
-      (foundOne - gcd, insertOrFoundTwo)
+      val insertOrFoundTwo = getFramePositionPropagating(two, firstFrame + 1)
+      (foundOne - lastGCcount, insertOrFoundTwo)
     } else {
       val (insertOrFoundOne, sccState) = findOrPigeonHolePropagatingPredictive(one, firstFrame, fromFinalPredecessorRelationIsRecorded = false, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
       if(insertOrFoundOne >= 0) {
         // first one found: defer to just look for the second alone
-        val (insertOrFoundTwo, gcd) = getFramePositionPropagating(two, insertOrFoundOne + 1)
-        (insertOrFoundOne - gcd, insertOrFoundTwo)
+        val insertOrFoundTwo = getFramePositionPropagating(two, insertOrFoundOne + 1)
+        (insertOrFoundOne - lastGCcount, insertOrFoundTwo)
       } else {
         // first one not found:
         val insertOne = -insertOrFoundOne
@@ -369,8 +374,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         } else {
           val (insertOrFoundTwo, _) = findOrPigeonHolePropagatingPredictive(two, insertOne, fromFinalPredecessorRelationIsRecorded = true, size, toFinalRelationIsRecorded = true, sccState)
           if (insertOrFoundTwo >= 0) {
-            val (first, gcd) = arrangeVersionArrayAndCreateVersion(insertOne, one)
-            (first, insertOrFoundTwo - gcd + 1)
+            val first = arrangeVersionArrayAndCreateVersion(insertOne, one)
+            (first, insertOrFoundTwo - lastGCcount + 1)
           } else {
             arrangeVersionArrayAndCreateVersions(insertOne, one, -insertOrFoundTwo, two)
           }
@@ -755,7 +760,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param txn the transaction visiting the node for framing
     */
   override def incrementFrame(txn: T): FramingBranchResult[T, OutDep] = synchronized {
-    val result = incrementFrame0(txn, getFramePositionFraming(txn)._1)
+    val result = incrementFrame0(txn, getFramePositionFraming(txn))
     assertOptimizationsIntegrity(s"incrementFrame($txn) -> $result")
     result
   }
@@ -780,7 +785,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   override def decrementFrame(txn: T): FramingBranchResult[T, OutDep] = synchronized {
-    val result = decrementFrame0(txn, getFramePositionFraming(txn)._1)
+    val result = decrementFrame0(txn, getFramePositionFraming(txn))
     assertOptimizationsIntegrity(s"decrementFrame($txn) -> $result")
     result
   }
@@ -879,7 +884,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param changed whether or not the dependency changed
     */
   override def notify(txn: T, changed: Boolean): NotificationResultAction[T, OutDep] = synchronized {
-    val result = notify0(getFramePositionPropagating(txn)._1, txn, changed)
+    val result = notify0(getFramePositionPropagating(txn), txn, changed)
     assertOptimizationsIntegrity(s"notify($txn, $changed) -> $result")
     result
   }
@@ -999,19 +1004,21 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param txn the executing transaction
     * @return the version's position.
     */
-  private def ensureReadVersion(txn: T, knownOrderedMinPos: Int = latestGChint + 1): (Int, Int) = {
+  private def ensureReadVersion(txn: T, knownOrderedMinPos: Int = latestGChint + 1): Int = {
     assert(knownOrderedMinPos > latestGChint, s"nonsensical minpos $knownOrderedMinPos <= latestGChint $latestGChint")
     if(knownOrderedMinPos == size) {
       assert(txn.isTransitivePredecessor(_versions(knownOrderedMinPos - 1).txn) || _versions(knownOrderedMinPos - 1).txn.phase == TurnPhase.Completed, s"illegal $knownOrderedMinPos: predecessor ${_versions(knownOrderedMinPos - 1).txn} not ordered in $this")
       arrangeVersionArrayAndCreateVersion(size, txn)
     } else if (_versions(latestReevOut).txn == txn) {
-      (latestReevOut, 0)
+      lastGCcount = 0
+      latestReevOut
     } else {
       val (insertOrFound, _) = findOrPigeonHolePropagatingPredictive(txn, knownOrderedMinPos, fromFinalPredecessorRelationIsRecorded = true, size, toFinalRelationIsRecorded = true, UnlockedUnknown)
       if(insertOrFound < 0) {
         arrangeVersionArrayAndCreateVersion(-insertOrFound, txn)
       } else {
-        (insertOrFound, 0)
+        lastGCcount = 0
+        insertOrFound
       }
     }
   }
@@ -1026,7 +1033,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   override def dynamicBefore(txn: T): V = {
     assert(!valuePersistency.isTransient, s"$txn invoked dynamicBefore on transient node")
     val version = synchronized {
-      val pos = ensureReadVersion(txn)._1
+      val pos = ensureReadVersion(txn)
       // DO NOT INLINE THIS! it breaks the code! see https://scastie.scala-lang.org/briJDRO3RCmIMEd1zApmBQ
       _versions(pos)
     }
@@ -1055,7 +1062,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     */
   override def dynamicAfter(txn: T): V = {
     val version = synchronized {
-      val pos = ensureReadVersion(txn)._1
+      val pos = ensureReadVersion(txn)
       // DO NOT INLINE THIS! it breaks the code! see https://scastie.scala-lang.org/briJDRO3RCmIMEd1zApmBQ
       _versions(pos) }
     if(!version.isStable) version.blockForStable()
@@ -1094,7 +1101,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @return the appropriate [[Version.value]].
     */
   override def discover(txn: T, add: OutDep): (Seq[T], Option[T]) = synchronized {
-    val position = ensureReadVersion(txn)._1
+    val position = ensureReadVersion(txn)
     assert(!_versions(position).out.contains(add), "must not discover an already existing edge!")
     retrofitSourceOuts(position, add, +1)
   }
@@ -1105,7 +1112,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     * @param remove the removed edge's sink node
     */
   override def drop(txn: T, remove: OutDep): (Seq[T], Option[T]) = synchronized {
-    val position = ensureReadVersion(txn)._1
+    val position = ensureReadVersion(txn)
     assert(_versions(position).out.contains(remove), "must not drop a non-existing edge!")
     retrofitSourceOuts(position, remove, -1)
   }
@@ -1120,7 +1127,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
     require(math.abs(arity) == 1)
     var minPos = firstFrame
     for(txn <- successorWrittenVersions) {
-      val position = ensureReadVersion(txn, minPos)._1
+      val position = ensureReadVersion(txn, minPos)
       val version = _versions(position)
       // note: if drop retrofitting overtook a change notification, changed may update from 0 to -1 here!
       version.changed += arity
@@ -1129,7 +1136,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
 
     if (maybeSuccessorFrame.isDefined) {
       val txn = maybeSuccessorFrame.get
-      val position = ensureReadVersion(txn, minPos)._1
+      val position = ensureReadVersion(txn, minPos)
       val version = _versions(position)
       // note: conversely, if a (no)change notification overtook discovery retrofitting, pending may change
       // from -1 to 0 here. No handling is required for this case, because firstFrame < position is an active
@@ -1177,6 +1184,7 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   def fullGC(): Int = synchronized {
     moveGCHintToLatestCompleted()
     gcAndLeaveHoles(_versions, _versions(latestGChint).value.isDefined, 0, -1, -1)
+    lastGCcount
   }
 
   private def moveGCHintToLatestCompleted(): Unit = {
@@ -1205,9 +1213,9 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
   }
 
   private def arrangeVersionArrayAndCreateVersions(insertOne: Int, one: T, insertTwo: Int, two: T): (Int, Int) = {
-    val gcd = arrangeVersionArray(2, insertOne, insertTwo)
-    val first = insertOne - gcd
-    val second = insertTwo - gcd + 1
+    arrangeVersionArray(2, insertOne, insertTwo)
+    val first = insertOne - lastGCcount
+    val second = insertTwo - lastGCcount + 1
     if(first == size) {
       val predVersion = _versions(size - 1)
       val out = predVersion.out
@@ -1225,30 +1233,29 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       (first, second)
     }
   }
-  private def arrangeVersionArrayAndCreateVersion(insertPos: Int, txn: T): (Int, Int) = {
-    val gcd = arrangeVersionArray(1, insertPos, -1)
-    val pos = insertPos - gcd
+  private def arrangeVersionArrayAndCreateVersion(insertPos: Int, txn: T): Int = {
+    arrangeVersionArray(1, insertPos, -1)
+    val pos = insertPos - lastGCcount
     createVersionInHole(pos, txn)
     assertOptimizationsIntegrity(s"arrangeVersions($insertPos -> $pos, $txn)")
-    (pos, gcd)
+    pos
   }
 
-  private def arrangeVersionArray(create: Int, firstHole: Int, secondHole: Int): Int = {
+  private def arrangeVersionArray(create: Int, firstHole: Int, secondHole: Int): Unit = {
     assert(create != 0 || (firstHole < 0 && secondHole < 0), s"holes $firstHole and $secondHole do not match 0 insertions")
     assert(create != 1 || (firstHole >= 0 && secondHole < 0), s"holes $firstHole and $secondHole do not match 1 insertions")
     assert(create != 2 || (firstHole >= 0 && secondHole >= 0), s"holes $firstHole and $secondHole do not match 2 insertions")
     assert(secondHole < 0 || secondHole >= firstHole, s"second hole ${secondHole }must be behind or at first $firstHole")
     if(firstHole == size && size + create <= _versions.length) {
       // if only versions should be added at the end (i.e., existing versions don't need to be moved) and there's enough room, just don't do anything
-      0
+      lastGCcount = 0
     } else {
       if (NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] gc attempt to insert $create: ($firstHole, $secondHole) in $this")
       val hintVersionIsWritten = _versions(latestGChint).value.isDefined
       val straightDump = latestGChint - (if (hintVersionIsWritten) 0 else 1)
-      val res = if(straightDump == 0 && size + create <= _versions.length) {
+      if(straightDump == 0 && size + create <= _versions.length) {
         if (NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] hintgc($latestGChint): -$straightDump would have no effect, but history rearrangement is possible")
         arrangeHolesWithoutGC(_versions, firstHole, secondHole)
-        0
       } else if (size - straightDump + create <= _versions.length) {
         if(NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] hintgc($latestGChint): -$straightDump accepted")
         gcAndLeaveHoles(_versions, hintVersionIsWritten, create, firstHole, secondHole)
@@ -1264,21 +1271,18 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
         } else {
           // full GC also isn't enough either: grow the array.
           val grown = new Array[Version](_versions.length + (_versions.length >> 1))
-          val gcd = if(fullDump == 0) {
+          if(fullDump == 0) {
             if(NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] fullgc($latestGChint): -$fullDump would have no effect, rearraging after growing max size ${_versions.length} -> ${grown.length}")
             if(firstHole > 0) System.arraycopy(_versions, 0, grown, 0, firstHole)
             arrangeHolesWithoutGC(grown, firstHole, secondHole)
-            0
           } else {
             if(NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] fullgc($latestGChint): -$fullDump insufficient, also growing max size ${_versions.length} -> ${grown.length}")
             gcAndLeaveHoles(grown, fullGCVersionIsWritten, create, firstHole, secondHole)
           }
           _versions = grown
-          gcd
         }
       }
-      if(NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] after gc, holes at (${if(firstHole == -1) -1 else firstHole - res}, ${if(secondHole == -1) -1 else secondHole - res + 1}): $this")
-      res
+      if(NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] after gc of $lastGCcount, holes at (${if(firstHole == -1) -1 else firstHole - lastGCcount}, ${if(secondHole == -1) -1 else secondHole - lastGCcount + 1}): $this")
     }
   }
 
@@ -1287,39 +1291,34 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       if (secondHole < 0 || secondHole == size) {
         System.arraycopy(_versions, firstHole, writeTo, firstHole + 1, size - firstHole)
       } else {
-        if (secondHole == firstHole) {
-          System.arraycopy(_versions, firstHole, writeTo, firstHole + 2, size - firstHole)
-        } else {
-          System.arraycopy(_versions, secondHole, writeTo, secondHole + 2, size - secondHole)
-          System.arraycopy(_versions, firstHole, writeTo, firstHole + 1, secondHole - firstHole)
-        }
+        System.arraycopy(_versions, secondHole, writeTo, secondHole + 2, size - secondHole)
+        if (secondHole != firstHole) System.arraycopy(_versions, firstHole, writeTo, firstHole + 1, secondHole - firstHole)
       }
     }
+    lastGCcount = 0
   }
 
-  private def gcAndLeaveHoles(writeTo: Array[Version], hintVersionIsWritten: Boolean, create: Int, firstHole: Int, secondHole: Int) = {
+  private def gcAndLeaveHoles(writeTo: Array[Version], hintVersionIsWritten: Boolean, create: Int, firstHole: Int, secondHole: Int): Unit = {
     // if a straight dump using the gc hint makes enough room, just do that
-    val dumpCount = if (hintVersionIsWritten) {
+    if (hintVersionIsWritten) {
       if(NodeVersionHistory.DEBUG_GC) println(s"[${Thread.currentThread().getName}] hint is written: dumping $latestGChint to offset 0")
       // if hint is written, just dump everything before
       latestReevOut -= latestGChint
       dumpToOffsetAndLeaveHoles(writeTo, latestGChint, 0, firstHole, secondHole)
-      latestGChint
+      lastGCcount = latestGChint
     } else {
       // otherwise find the latest write before the hint, move it to index 0, and only dump everything else
-      val dumpCount = latestGChint - 1
+      lastGCcount = latestGChint - 1
       writeTo(0) = _versions(latestGChint).lastWrittenPredecessorIfStable
-      latestReevOut = if(latestReevOut <= latestGChint) 0 else latestReevOut - dumpCount
+      latestReevOut = if(latestReevOut <= latestGChint) 0 else latestReevOut - lastGCcount
       dumpToOffsetAndLeaveHoles(writeTo, latestGChint, 1, firstHole, secondHole)
-      dumpCount
     }
     writeTo(0).lastWrittenPredecessorIfStable = null
     val sizeBefore = size
-    latestGChint -= dumpCount
-    firstFrame -= dumpCount
-    size -= dumpCount
+    latestGChint -= lastGCcount
+    firstFrame -= lastGCcount
+    size -= lastGCcount
     if ((_versions eq writeTo) && size + create < sizeBefore) java.util.Arrays.fill(_versions.asInstanceOf[Array[AnyRef]], size + create, sizeBefore, null)
-    dumpCount
   }
 
   private def dumpToOffsetAndLeaveHoles(writeTo: Array[Version], retainFrom: Int, retainTo: Int, firstHole: Int, secondHole: Int): Unit = {
@@ -1338,12 +1337,8 @@ class NodeVersionHistory[V, T <: FullMVTurn, InDep, OutDep](init: T, val valuePe
       if (secondHole < 0 || secondHole == size) {
         // no second hole or second hole at the end only: there are only two segments
         if((_versions ne writeTo) || gcOffset != 1) System.arraycopy(_versions, firstHole, writeTo, newFirstHole + 1, size - firstHole)
-      } else if (secondHole == firstHole) {
-        // second hole same as first one: there are still only two segments, but leave two-wide hole inbetween
-        if((_versions ne writeTo) || gcOffset != 2) System.arraycopy(_versions, firstHole, writeTo, newFirstHole + 2, size - firstHole)
       } else {
-        // three segments with one hole between each
-        if((_versions ne writeTo) || gcOffset != 1) System.arraycopy(_versions, firstHole, writeTo, newFirstHole + 1, secondHole - firstHole)
+        if (secondHole != firstHole && ((_versions ne writeTo) || gcOffset != 1)) System.arraycopy(_versions, firstHole, writeTo, newFirstHole + 1, secondHole - firstHole)
         if((_versions ne writeTo) || gcOffset != 2) System.arraycopy(_versions, secondHole, writeTo, gcOffset + secondHole + 2, size - secondHole)
       }
     }

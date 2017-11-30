@@ -62,11 +62,6 @@ class PaperCompetition[S <: Struct] extends BusyThreads {
 //    }
   }
 
-  @TearDown(Level.Iteration)
-  def writeScores(): Unit = {
-    table.dumpScores()
-  }
-
 //  @TearDown(Level.Iteration)
 //  def writeLockContentionTimer(): Unit = {
 //      if(stream != null) {

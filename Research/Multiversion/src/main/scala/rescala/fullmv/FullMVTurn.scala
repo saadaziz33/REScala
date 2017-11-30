@@ -181,7 +181,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================ToString============================================================
 
-  override def toString: String = s"FullMVTurn($hc by ${userlandThread.getName}, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
+  override def toString: String = s"FullMVTurn($hc by ${if(userlandThread == null) "none" else userlandThread.getName}, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
 
   //========================================================Scheduler Interface============================================================
 
