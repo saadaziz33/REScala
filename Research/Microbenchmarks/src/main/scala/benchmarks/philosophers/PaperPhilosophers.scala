@@ -12,6 +12,8 @@ import scala.concurrent.duration._
 import scala.util.{Failure, Success, Try}
 
 abstract class PaperPhilosophers[S <: Struct](val size: Int, val engine: Engine[S], dynamicEdgeChanges: Boolean) {
+  def dumpScores(): Unit
+
   import engine._
 
   sealed trait Philosopher
@@ -129,6 +131,10 @@ trait EventTopper[S <: Struct] {
     REName.named(s"successCount") { implicit ! =>
       anySuccess.fold(0) { (acc, _) => acc + 1 }
     }
+
+  override def dumpScores(): Unit = {
+    println(s"event topper -> no individual scores. Overall score = ${successCount.now}")
+  }
 }
 
 trait SignalTopper[S <: Struct] {
@@ -146,6 +152,13 @@ trait SignalTopper[S <: Struct] {
         Signal { a() + b() }
       }
     }
+
+  override def dumpScores(): Unit = {
+    val counts = individualCounts.map(_.now)
+    val sum1 = counts.sum
+    val sum2 = total
+    println(s"sum($counts) = $sum1 ${if(sum1 == sum2) "==" else "!="} $sum2")
+  }
 }
 
 object PaperPhilosophers {
