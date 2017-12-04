@@ -13,7 +13,7 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
   def newTurn(): FullMVTurn = new FullMVTurn(this, Thread.currentThread())
   val dummy: FullMVTurn = {
     val dummy = new FullMVTurn(this, null)
-    dummy.awaitAndSwitchPhase(TurnPhase.Completed)
+    dummy.phase = TurnPhase.Completed
     dummy
   }
 
@@ -25,11 +25,12 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
       val setWrites = declaredWrites.toSet // this *should* be part of the interface..
       if (setWrites.nonEmpty) {
         // framing phase
-        turn.awaitAndSwitchPhase(TurnPhase.Framing)
+        turn.beginFraming()
         for (i <- setWrites) turn.offer(Framing(turn, i))
+        turn.completeFraming()
+      } else {
+        turn.beginExecuting()
       }
-
-      turn.awaitAndSwitchPhase(TurnPhase.Executing)
 
       // admission phase
       val admissionTicket = turn.makeAdmissionPhaseTicket()
@@ -48,16 +49,11 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
         }
       }
 
-      // propagation completion
-      if (FullMVEngine.SEPARATE_WRAPUP_PHASE) turn.awaitAndSwitchPhase(TurnPhase.WrapUp)
-
       // wrap-up "phase" (executes in parallel with propagation)
       admissionResult.map { i => admissionTicket.wrapUp(turn.makeWrapUpPhaseTicket()); i }
 
-      if (FullMVEngine.SEPARATE_WRAPUP_PHASE) assert(turn.taskQueue.isEmpty, s"WrapUp phase left ${turn.taskQueue.size()} active branches.")
-
       // turn completion
-      turn.awaitAndSwitchPhase(TurnPhase.Completed)
+      turn.completeExecuting()
 
       // result
       admissionResult.get
@@ -68,7 +64,6 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
 }
 
 object FullMVEngine {
-  val SEPARATE_WRAPUP_PHASE = false
   val DEBUG = false
 
   val default = new FullMVEngine(10.seconds, "default")
