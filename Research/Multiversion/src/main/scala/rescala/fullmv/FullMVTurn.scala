@@ -1,5 +1,6 @@
 package rescala.fullmv
 
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.{LockSupport, ReentrantReadWriteLock}
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ThreadLocalRandom}
 
@@ -33,7 +34,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================Local State Control============================================================
 
-//  var restarts: Int = 0
+  var restarts: Int = 0
 
   private def awaitAndSwitchPhase(newPhase: TurnPhase.Type): Unit = {
     assert(newPhase > this.phase, s"$this cannot progress backwards to phase $newPhase.")
@@ -42,7 +43,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
       if (head != null) {
         if (registeredForWaiting != null) {
           registeredForWaiting.waiters.remove(this.userlandThread)
-//          restarts += 1
+          restarts += 1
         }
         assert(head.turn == this, s"task queue of $this contains different turn's $head")
         head.compute()
@@ -112,27 +113,27 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   def completeFraming(): Unit = {
     assert(this.phase == TurnPhase.Framing, s"$this cannot complete framing: Not in framing phase")
-//    restarts = 0
+    restarts = 0
     awaitAndSwitchPhase(TurnPhase.Executing)
-//    val contained1 = FullMVTurn.framingStats.get(restarts)
-//    if(contained1 == null) {
-//      val put = new AtomicLong()
-//      val prev = FullMVTurn.framingStats.putIfAbsent(restarts, put)
-//      if(prev == null) put else prev
-//    } else { contained1 }.getAndIncrement()
+    val contained1 = FullMVTurn.framingStats.get(restarts)
+    if(contained1 == null) {
+      val put = new AtomicLong()
+      val prev = FullMVTurn.framingStats.putIfAbsent(restarts, put)
+      if(prev == null) put else prev
+    } else { contained1 }.getAndIncrement()
   }
   def completeExecuting(): Unit = {
     assert(this.phase == TurnPhase.Executing, s"$this cannot complete executing: Not in executing phase")
-    //    restarts = 0
+    restarts = 0
     awaitAndSwitchPhase(TurnPhase.Completed)
     predecessorSpanningTreeNodes = Map.empty
     selfNode = null
-//      val contained2 = FullMVTurn.executingStats.get(restarts)
-//      if(contained2 == null) {
-//        val put = new AtomicLong()
-//        val prev = FullMVTurn.executingStats.putIfAbsent(restarts, put)
-//        if(prev == null) put else prev
-//      } else { contained2 }.getAndIncrement()
+      val contained2 = FullMVTurn.executingStats.get(restarts)
+      if(contained2 == null) {
+        val put = new AtomicLong()
+        val prev = FullMVTurn.executingStats.putIfAbsent(restarts, put)
+        if(prev == null) put else prev
+      } else { contained2 }.getAndIncrement()
   }
 
   @tailrec private def awaitBranchCountZero(): Unit = {
@@ -275,6 +276,6 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 object FullMVTurn {
   val CONSTANT_BACKOFF = 10000L // 10µs
   val MAX_BACKOFF = 100000L // 100µs
-//  val framingStats = new ConcurrentHashMap[Int, AtomicLong]()
-//  val executingStats = new ConcurrentHashMap[Int, AtomicLong]()
+  val framingStats = new ConcurrentHashMap[Int, AtomicLong]()
+  val executingStats = new ConcurrentHashMap[Int, AtomicLong]()
 }
