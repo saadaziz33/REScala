@@ -78,7 +78,8 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
             awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, currentUnknownPredecessor)
           } else {
             val now = System.nanoTime()
-            if(now > parkAfter) {
+            val parkTimeSet = parkAfter > 0L
+            if(parkTimeSet && now > parkAfter) {
               currentUnknownPredecessor.waiters.put(this.userlandThread, newPhase)
               awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, currentUnknownPredecessor)
             } else {
@@ -86,7 +87,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
               do {
                 Thread.`yield`()
               } while (System.nanoTime() < end)
-              awaitAndSwitchPhase0(firstUnknownPredecessorIndex, now + FullMVTurn.MAX_BACKOFF, currentUnknownPredecessor)
+              awaitAndSwitchPhase0(firstUnknownPredecessorIndex, if(parkTimeSet) parkAfter else now + FullMVTurn.MAX_BACKOFF, currentUnknownPredecessor)
             }
           }
         } else {
