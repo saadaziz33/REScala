@@ -87,7 +87,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
               do {
                 Thread.`yield`()
               } while (System.nanoTime() < end)
-              awaitAndSwitchPhase0(firstUnknownPredecessorIndex, if(parkTimeSet) parkAfter else now + FullMVTurn.MAX_BACKOFF, currentUnknownPredecessor)
+              awaitAndSwitchPhase0(firstUnknownPredecessorIndex, if(parkTimeSet) parkAfter else now + FullMVTurn.MAX_BACKOFF, null)
             }
           }
         } else {
@@ -103,7 +103,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     assert(this.phase == TurnPhase.Initialized, s"$this already begun")
     assert(taskQueue.isEmpty, s"$this cannot begin $phase: queue non empty!")
     assert(selfNode.size == 0, s"$this cannot begin $phase: already has predecessors!")
-    if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] begun.")
+    if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this begun.")
     this.phase = phase
   }
 
