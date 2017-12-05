@@ -134,11 +134,19 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     FullMVTurn.framesync.synchronized {
       val maybeCount1 = FullMVTurn.spinSwitchStatsFraming.get(spinSwitch)
       FullMVTurn.spinSwitchStatsFraming.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
-      val it = spinRestart.iterator()
-      while(it.hasNext) {
-        val key = it.next()
-        val maybeCount2 = FullMVTurn.spinRestartStatsFraming.get(key)
-        FullMVTurn.spinRestartStatsFraming.put(key, if (maybeCount2 == null) 1L else maybeCount2 + 1L)
+      val maybeCount2 = FullMVTurn.parkSwitchStatsFraming.get(parkSwitch)
+      FullMVTurn.parkSwitchStatsFraming.put(parkSwitch, if(maybeCount2 == null) 1L else maybeCount2 + 1L)
+      val it1 = spinRestart.iterator()
+      while(it1.hasNext) {
+        val key = it1.next()
+        val maybeCount3 = FullMVTurn.spinRestartStatsFraming.get(key)
+        FullMVTurn.spinRestartStatsFraming.put(key, if (maybeCount3 == null) 1L else maybeCount3 + 1L)
+      }
+      val it2 = parkRestart.iterator()
+      while(it2.hasNext) {
+        val key = it2.next()
+        val maybeCount4 = FullMVTurn.parkRestartStatsFraming.get(key)
+        FullMVTurn.parkRestartStatsFraming.put(key, if (maybeCount4 == null) 1L else maybeCount4 + 1L)
       }
     }
   }
@@ -151,11 +159,19 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
     FullMVTurn.execsync.synchronized {
       val maybeCount1 = FullMVTurn.spinSwitchStatsExecuting.get(spinSwitch)
       FullMVTurn.spinSwitchStatsExecuting.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
-      val it = spinRestart.iterator()
-      while(it.hasNext) {
-        val key = it.next()
-        val maybeCount2 = FullMVTurn.spinRestartStatsExecuting.get(key)
-        FullMVTurn.spinRestartStatsExecuting.put(key, if (maybeCount2 == null) 1L else maybeCount2 + 1L)
+      val maybeCount2 = FullMVTurn.parkSwitchStatsExecuting.get(parkSwitch)
+      FullMVTurn.parkSwitchStatsExecuting.put(parkSwitch, if(maybeCount2 == null) 1L else maybeCount2 + 1L)
+      val it1 = spinRestart.iterator()
+      while(it1.hasNext) {
+        val key = it1.next()
+        val maybeCount3 = FullMVTurn.spinRestartStatsExecuting.get(key)
+        FullMVTurn.spinRestartStatsExecuting.put(key, if (maybeCount3 == null) 1L else maybeCount3 + 1L)
+      }
+      val it2 = parkRestart.iterator()
+      while(it2.hasNext) {
+        val key = it2.next()
+        val maybeCount4 = FullMVTurn.parkRestartStatsExecuting.get(key)
+        FullMVTurn.parkRestartStatsExecuting.put(key, if (maybeCount4 == null) 1L else maybeCount4 + 1L)
       }
     }
   }
