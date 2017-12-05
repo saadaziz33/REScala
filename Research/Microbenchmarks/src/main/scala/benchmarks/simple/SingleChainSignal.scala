@@ -1,11 +1,12 @@
 package benchmarks.simple
 
+import java.util
 import java.util.concurrent.TimeUnit
 
 import benchmarks._
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.BenchmarkParams
-import rescala.core.{Engine, Struct}
+import rescala.core.{Engine, REName, Struct}
 import rescala.fullmv.FullMVTurn
 import rescala.reactives.{Signal, Var}
 
@@ -26,8 +27,10 @@ class SingleChainSignal[S <: Struct] extends BusyThreads {
     engine = engineParam.engine
     source = Var(step.run())
     result = source
-    for (_ <- Range(0, size.size)) {
-      result = result.map{v => val r = v + 1; work.consume(); r}
+    for (i <- 1 to size.size) {
+      result = REName.named(s"map-$i") { implicit! =>
+        result.map{v => val r = v + 1; work.consume(); r}
+      }
     }
   }
 
@@ -36,19 +39,23 @@ class SingleChainSignal[S <: Struct] extends BusyThreads {
 
   @TearDown(Level.Trial) def printStats(p: BenchmarkParams): Unit = {
     println()
-    println(s"Threads\tPhase\tRestarts\tCount")
-    val it1 = FullMVTurn.framingStats.entrySet().iterator()
-    while(it1.hasNext) {
-      val entry = it1.next()
-      println(s"${p.getThreads}\tFraming\t${entry.getKey}\t${entry.getValue.get}")
+    println(s"Threads\tPhase\tkind\tRestartResult\tCount")
+    printMap(p, "Framing", "spin switch", FullMVTurn.spinSwitchStatsFraming)
+    printMap(p, "Framing", "spin restart", FullMVTurn.spinRestartStatsFraming)
+    printMap(p, "Framing", "park switch", FullMVTurn.parkSwitchStatsFraming)
+    printMap(p, "Framing", "park restart", FullMVTurn.parkRestartStatsFraming)
+    printMap(p, "Executing", "spin switch", FullMVTurn.spinSwitchStatsExecuting)
+    printMap(p, "Executing", "spin restart", FullMVTurn.spinRestartStatsExecuting)
+    printMap(p, "Executing", "park switch", FullMVTurn.parkSwitchStatsExecuting)
+    printMap(p, "Executing", "park restart", FullMVTurn.parkRestartStatsExecuting)
+  }
+
+  private def printMap(p: BenchmarkParams, phase: String, kind: String, map: util.HashMap[_, _]) = {
+    val it = map.entrySet().iterator()
+    while (it.hasNext) {
+      val entry = it.next()
+      println(s"${p.getThreads}\t$phase\t$kind\t${entry.getKey}\t${entry.getValue}")
     }
-    FullMVTurn.framingStats.clear()
-    val it2 = FullMVTurn.executingStats.entrySet().iterator()
-    while(it2.hasNext) {
-      val entry = it2.next()
-      println(s"${p.getThreads}\tExecuting\t${entry.getKey}\t${entry.getValue.get}")
-    }
-    FullMVTurn.executingStats.clear()
-    println()
+    map.clear()
   }
 }

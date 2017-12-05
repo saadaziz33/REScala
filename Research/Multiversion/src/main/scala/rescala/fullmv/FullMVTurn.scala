@@ -1,13 +1,12 @@
 package rescala.fullmv
 
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.locks.{LockSupport, ReentrantReadWriteLock}
 import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ThreadLocalRandom}
 
 import rescala.core._
 import rescala.fullmv.NotificationResultAction.{GlitchFreeReady, NotGlitchFreeReady, NotificationOutAndSuccessorOperation}
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{NextReevaluation, NoSuccessor}
-import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation}
+import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation, ReevaluationResultHandling}
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
@@ -34,7 +33,10 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================Local State Control============================================================
 
-  var restarts: Int = 0
+  var spinSwitch = 0
+  var parkSwitch = 0
+  val spinRestart = new java.util.HashSet[String]()
+  val parkRestart = new java.util.HashSet[String]()
 
   private def awaitAndSwitchPhase(newPhase: TurnPhase.Type): Unit = {
     assert(newPhase > this.phase, s"$this cannot progress backwards to phase $newPhase.")
@@ -43,7 +45,9 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
       if (head != null) {
         if (registeredForWaiting != null) {
           registeredForWaiting.waiters.remove(this.userlandThread)
-          restarts += 1
+          parkRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
+        } else if (parkAfter > 0) {
+          spinRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
         }
         assert(head.turn == this, s"task queue of $this contains different turn's $head")
         head.compute()
@@ -92,7 +96,12 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
             }
           }
         } else {
-          if (registeredForWaiting != null) currentUnknownPredecessor.waiters.remove(this.userlandThread)
+          if (registeredForWaiting != null) {
+            currentUnknownPredecessor.waiters.remove(this.userlandThread)
+            parkSwitch += 1
+          } else if (parkAfter > 0) {
+            spinSwitch += 1
+          }
           awaitAndSwitchPhase0(firstUnknownPredecessorIndex + 1, 0L, null)
         }
       }
@@ -111,29 +120,44 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   def beginFraming(): Unit = beginPhase(TurnPhase.Framing)
   def beginExecuting(): Unit = beginPhase(TurnPhase.Executing)
 
+  def resetStatistics() = {
+    spinSwitch = 0
+    parkSwitch = 0
+    spinRestart.clear()
+    parkRestart.clear()
+  }
+
   def completeFraming(): Unit = {
     assert(this.phase == TurnPhase.Framing, s"$this cannot complete framing: Not in framing phase")
-    restarts = 0
+    resetStatistics()
     awaitAndSwitchPhase(TurnPhase.Executing)
-    val contained1 = FullMVTurn.framingStats.get(restarts)
-    if(contained1 == null) {
-      val put = new AtomicLong()
-      val prev = FullMVTurn.framingStats.putIfAbsent(restarts, put)
-      if(prev == null) put else prev
-    } else { contained1 }.getAndIncrement()
+    FullMVTurn.framesync.synchronized {
+      val maybeCount1 = FullMVTurn.spinSwitchStatsFraming.get(spinSwitch)
+      FullMVTurn.spinSwitchStatsFraming.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
+      val it = spinRestart.iterator()
+      while(it.hasNext) {
+        val key = it.next()
+        val maybeCount2 = FullMVTurn.spinRestartStatsFraming.get(key)
+        FullMVTurn.spinRestartStatsFraming.put(key, if (maybeCount2 == null) 1L else maybeCount2 + 1L)
+      }
+    }
   }
   def completeExecuting(): Unit = {
     assert(this.phase == TurnPhase.Executing, s"$this cannot complete executing: Not in executing phase")
-    restarts = 0
+    resetStatistics()
     awaitAndSwitchPhase(TurnPhase.Completed)
     predecessorSpanningTreeNodes = Map.empty
     selfNode = null
-      val contained2 = FullMVTurn.executingStats.get(restarts)
-      if(contained2 == null) {
-        val put = new AtomicLong()
-        val prev = FullMVTurn.executingStats.putIfAbsent(restarts, put)
-        if(prev == null) put else prev
-      } else { contained2 }.getAndIncrement()
+    FullMVTurn.execsync.synchronized {
+      val maybeCount1 = FullMVTurn.spinSwitchStatsExecuting.get(spinSwitch)
+      FullMVTurn.spinSwitchStatsExecuting.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
+      val it = spinRestart.iterator()
+      while(it.hasNext) {
+        val key = it.next()
+        val maybeCount2 = FullMVTurn.spinRestartStatsExecuting.get(key)
+        FullMVTurn.spinRestartStatsExecuting.put(key, if (maybeCount2 == null) 1L else maybeCount2 + 1L)
+      }
+    }
   }
 
   @tailrec private def awaitBranchCountZero(): Unit = {
@@ -276,6 +300,15 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 object FullMVTurn {
   val CONSTANT_BACKOFF = 10000L // 10µs
   val MAX_BACKOFF = 100000L // 100µs
-  val framingStats = new ConcurrentHashMap[Int, AtomicLong]()
-  val executingStats = new ConcurrentHashMap[Int, AtomicLong]()
+
+  object framesync
+  var spinSwitchStatsFraming = new java.util.HashMap[Int, java.lang.Long]()
+  var parkSwitchStatsFraming = new java.util.HashMap[Int, java.lang.Long]()
+  val spinRestartStatsFraming = new java.util.HashMap[String, java.lang.Long]()
+  val parkRestartStatsFraming =  new java.util.HashMap[String, java.lang.Long]()
+  object execsync
+  var spinSwitchStatsExecuting = new java.util.HashMap[Int, java.lang.Long]()
+  var parkSwitchStatsExecuting = new java.util.HashMap[Int, java.lang.Long]()
+  val spinRestartStatsExecuting = new java.util.HashMap[String, java.lang.Long]()
+  val parkRestartStatsExecuting = new java.util.HashMap[String, java.lang.Long]()
 }
