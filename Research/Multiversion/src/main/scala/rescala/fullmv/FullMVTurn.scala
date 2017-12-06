@@ -33,10 +33,10 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================Local State Control============================================================
 
-  var spinSwitch = 0
-  var parkSwitch = 0
-  val spinRestart = new java.util.HashSet[String]()
-  val parkRestart = new java.util.HashSet[String]()
+//  var spinSwitch = 0
+//  var parkSwitch = 0
+//  val spinRestart = new java.util.HashSet[String]()
+//  val parkRestart = new java.util.HashSet[String]()
 
   private def awaitAndSwitchPhase(newPhase: TurnPhase.Type): Unit = {
     assert(newPhase > this.phase, s"$this cannot progress backwards to phase $newPhase.")
@@ -45,9 +45,9 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
       if (head != null) {
         if (registeredForWaiting != null) {
           registeredForWaiting.waiters.remove(this.userlandThread)
-          parkRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
-        } else if (parkAfter > 0) {
-          spinRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
+//          parkRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
+//        } else if (parkAfter > 0) {
+//          spinRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
         }
         assert(head.turn == this, s"task queue of $this contains different turn's $head")
         head.compute()
@@ -98,9 +98,9 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
         } else {
           if (registeredForWaiting != null) {
             currentUnknownPredecessor.waiters.remove(this.userlandThread)
-            parkSwitch += 1
-          } else if (parkAfter > 0) {
-            spinSwitch += 1
+//            parkSwitch += 1
+//          } else if (parkAfter > 0) {
+//            spinSwitch += 1
           }
           awaitAndSwitchPhase0(firstUnknownPredecessorIndex + 1, 0L, null)
         }
@@ -120,60 +120,60 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   def beginFraming(): Unit = beginPhase(TurnPhase.Framing)
   def beginExecuting(): Unit = beginPhase(TurnPhase.Executing)
 
-  def resetStatistics() = {
-    spinSwitch = 0
-    parkSwitch = 0
-    spinRestart.clear()
-    parkRestart.clear()
-  }
+//  def resetStatistics() = {
+//    spinSwitch = 0
+//    parkSwitch = 0
+//    spinRestart.clear()
+//    parkRestart.clear()
+//  }
 
   def completeFraming(): Unit = {
     assert(this.phase == TurnPhase.Framing, s"$this cannot complete framing: Not in framing phase")
-    resetStatistics()
+//    resetStatistics()
     awaitAndSwitchPhase(TurnPhase.Executing)
-    FullMVTurn.framesync.synchronized {
-      val maybeCount1 = FullMVTurn.spinSwitchStatsFraming.get(spinSwitch)
-      FullMVTurn.spinSwitchStatsFraming.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
-      val maybeCount2 = FullMVTurn.parkSwitchStatsFraming.get(parkSwitch)
-      FullMVTurn.parkSwitchStatsFraming.put(parkSwitch, if(maybeCount2 == null) 1L else maybeCount2 + 1L)
-      val it1 = spinRestart.iterator()
-      while(it1.hasNext) {
-        val key = it1.next()
-        val maybeCount3 = FullMVTurn.spinRestartStatsFraming.get(key)
-        FullMVTurn.spinRestartStatsFraming.put(key, if (maybeCount3 == null) 1L else maybeCount3 + 1L)
-      }
-      val it2 = parkRestart.iterator()
-      while(it2.hasNext) {
-        val key = it2.next()
-        val maybeCount4 = FullMVTurn.parkRestartStatsFraming.get(key)
-        FullMVTurn.parkRestartStatsFraming.put(key, if (maybeCount4 == null) 1L else maybeCount4 + 1L)
-      }
-    }
+//    FullMVTurn.framesync.synchronized {
+//      val maybeCount1 = FullMVTurn.spinSwitchStatsFraming.get(spinSwitch)
+//      FullMVTurn.spinSwitchStatsFraming.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
+//      val maybeCount2 = FullMVTurn.parkSwitchStatsFraming.get(parkSwitch)
+//      FullMVTurn.parkSwitchStatsFraming.put(parkSwitch, if(maybeCount2 == null) 1L else maybeCount2 + 1L)
+//      val it1 = spinRestart.iterator()
+//      while(it1.hasNext) {
+//        val key = it1.next()
+//        val maybeCount3 = FullMVTurn.spinRestartStatsFraming.get(key)
+//        FullMVTurn.spinRestartStatsFraming.put(key, if (maybeCount3 == null) 1L else maybeCount3 + 1L)
+//      }
+//      val it2 = parkRestart.iterator()
+//      while(it2.hasNext) {
+//        val key = it2.next()
+//        val maybeCount4 = FullMVTurn.parkRestartStatsFraming.get(key)
+//        FullMVTurn.parkRestartStatsFraming.put(key, if (maybeCount4 == null) 1L else maybeCount4 + 1L)
+//      }
+//    }
   }
   def completeExecuting(): Unit = {
     assert(this.phase == TurnPhase.Executing, s"$this cannot complete executing: Not in executing phase")
-    resetStatistics()
+//    resetStatistics()
     awaitAndSwitchPhase(TurnPhase.Completed)
     predecessorSpanningTreeNodes = Map.empty
     selfNode = null
-    FullMVTurn.execsync.synchronized {
-      val maybeCount1 = FullMVTurn.spinSwitchStatsExecuting.get(spinSwitch)
-      FullMVTurn.spinSwitchStatsExecuting.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
-      val maybeCount2 = FullMVTurn.parkSwitchStatsExecuting.get(parkSwitch)
-      FullMVTurn.parkSwitchStatsExecuting.put(parkSwitch, if(maybeCount2 == null) 1L else maybeCount2 + 1L)
-      val it1 = spinRestart.iterator()
-      while(it1.hasNext) {
-        val key = it1.next()
-        val maybeCount3 = FullMVTurn.spinRestartStatsExecuting.get(key)
-        FullMVTurn.spinRestartStatsExecuting.put(key, if (maybeCount3 == null) 1L else maybeCount3 + 1L)
-      }
-      val it2 = parkRestart.iterator()
-      while(it2.hasNext) {
-        val key = it2.next()
-        val maybeCount4 = FullMVTurn.parkRestartStatsExecuting.get(key)
-        FullMVTurn.parkRestartStatsExecuting.put(key, if (maybeCount4 == null) 1L else maybeCount4 + 1L)
-      }
-    }
+//    FullMVTurn.execsync.synchronized {
+//      val maybeCount1 = FullMVTurn.spinSwitchStatsExecuting.get(spinSwitch)
+//      FullMVTurn.spinSwitchStatsExecuting.put(spinSwitch, if(maybeCount1 == null) 1L else maybeCount1 + 1L)
+//      val maybeCount2 = FullMVTurn.parkSwitchStatsExecuting.get(parkSwitch)
+//      FullMVTurn.parkSwitchStatsExecuting.put(parkSwitch, if(maybeCount2 == null) 1L else maybeCount2 + 1L)
+//      val it1 = spinRestart.iterator()
+//      while(it1.hasNext) {
+//        val key = it1.next()
+//        val maybeCount3 = FullMVTurn.spinRestartStatsExecuting.get(key)
+//        FullMVTurn.spinRestartStatsExecuting.put(key, if (maybeCount3 == null) 1L else maybeCount3 + 1L)
+//      }
+//      val it2 = parkRestart.iterator()
+//      while(it2.hasNext) {
+//        val key = it2.next()
+//        val maybeCount4 = FullMVTurn.parkRestartStatsExecuting.get(key)
+//        FullMVTurn.parkRestartStatsExecuting.put(key, if (maybeCount4 == null) 1L else maybeCount4 + 1L)
+//      }
+//    }
   }
 
   @tailrec private def awaitBranchCountZero(): Unit = {
@@ -317,14 +317,14 @@ object FullMVTurn {
   val CONSTANT_BACKOFF = 10000L // 10µs
   val MAX_BACKOFF = 100000L // 100µs
 
-  object framesync
-  var spinSwitchStatsFraming = new java.util.HashMap[Int, java.lang.Long]()
-  var parkSwitchStatsFraming = new java.util.HashMap[Int, java.lang.Long]()
-  val spinRestartStatsFraming = new java.util.HashMap[String, java.lang.Long]()
-  val parkRestartStatsFraming =  new java.util.HashMap[String, java.lang.Long]()
-  object execsync
-  var spinSwitchStatsExecuting = new java.util.HashMap[Int, java.lang.Long]()
-  var parkSwitchStatsExecuting = new java.util.HashMap[Int, java.lang.Long]()
-  val spinRestartStatsExecuting = new java.util.HashMap[String, java.lang.Long]()
-  val parkRestartStatsExecuting = new java.util.HashMap[String, java.lang.Long]()
+//  object framesync
+//  var spinSwitchStatsFraming = new java.util.HashMap[Int, java.lang.Long]()
+//  var parkSwitchStatsFraming = new java.util.HashMap[Int, java.lang.Long]()
+//  val spinRestartStatsFraming = new java.util.HashMap[String, java.lang.Long]()
+//  val parkRestartStatsFraming =  new java.util.HashMap[String, java.lang.Long]()
+//  object execsync
+//  var spinSwitchStatsExecuting = new java.util.HashMap[Int, java.lang.Long]()
+//  var parkSwitchStatsExecuting = new java.util.HashMap[Int, java.lang.Long]()
+//  val spinRestartStatsExecuting = new java.util.HashMap[String, java.lang.Long]()
+//  val parkRestartStatsExecuting = new java.util.HashMap[String, java.lang.Long]()
 }

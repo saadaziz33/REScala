@@ -37,25 +37,25 @@ class SingleChainSignal[S <: Struct] extends BusyThreads {
   @Benchmark
   def run(step: Step): Unit = source.set(step.run())
 
-  @TearDown(Level.Trial) def printStats(p: BenchmarkParams): Unit = {
-    println()
-    println(s"Threads\tPhase\tkind\tRestartResult\tCount")
-    printMap(p, "Framing", "spin switch", FullMVTurn.spinSwitchStatsFraming)
-    printMap(p, "Framing", "spin restart", FullMVTurn.spinRestartStatsFraming)
-    printMap(p, "Framing", "park switch", FullMVTurn.parkSwitchStatsFraming)
-    printMap(p, "Framing", "park restart", FullMVTurn.parkRestartStatsFraming)
-    printMap(p, "Executing", "spin switch", FullMVTurn.spinSwitchStatsExecuting)
-    printMap(p, "Executing", "spin restart", FullMVTurn.spinRestartStatsExecuting)
-    printMap(p, "Executing", "park switch", FullMVTurn.parkSwitchStatsExecuting)
-    printMap(p, "Executing", "park restart", FullMVTurn.parkRestartStatsExecuting)
-  }
-
-  private def printMap(p: BenchmarkParams, phase: String, kind: String, map: util.HashMap[_, _]) = {
-    val it = map.entrySet().iterator()
-    while (it.hasNext) {
-      val entry = it.next()
-      println(s"${p.getThreads}\t$phase\t$kind\t${entry.getKey}\t${entry.getValue}")
-    }
-    map.clear()
-  }
+//  @TearDown(Level.Trial) def printStats(p: BenchmarkParams): Unit = {
+//    println()
+//    println(s"Threads\tPhase\tkind\tRestartResult\tCount")
+//    printMap(p, "Framing", "spin switch", FullMVTurn.spinSwitchStatsFraming)
+//    printMap(p, "Framing", "spin restart", FullMVTurn.spinRestartStatsFraming)
+//    printMap(p, "Framing", "park switch", FullMVTurn.parkSwitchStatsFraming)
+//    printMap(p, "Framing", "park restart", FullMVTurn.parkRestartStatsFraming)
+//    printMap(p, "Executing", "spin switch", FullMVTurn.spinSwitchStatsExecuting)
+//    printMap(p, "Executing", "spin restart", FullMVTurn.spinRestartStatsExecuting)
+//    printMap(p, "Executing", "park switch", FullMVTurn.parkSwitchStatsExecuting)
+//    printMap(p, "Executing", "park restart", FullMVTurn.parkRestartStatsExecuting)
+//  }
+//
+//  private def printMap(p: BenchmarkParams, phase: String, kind: String, map: util.HashMap[_, _]) = {
+//    val it = map.entrySet().iterator()
+//    while (it.hasNext) {
+//      val entry = it.next()
+//      println(s"${p.getThreads}\t$phase\t$kind\t${entry.getKey}\t${entry.getValue}")
+//    }
+//    map.clear()
+//  }
 }
