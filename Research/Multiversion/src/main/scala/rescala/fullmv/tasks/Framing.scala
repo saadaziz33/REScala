@@ -14,17 +14,33 @@ trait FramingTask extends FullMVAction {
       case FramingBranchEnd =>
         Traversable.empty
       case Frame(out, maybeOtherTurn) =>
-        for(dep <- out) maybeOtherTurn.offer(Framing(maybeOtherTurn, dep))
-        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
+        if(maybeOtherTurn != turn) {
+          for(dep <- out) maybeOtherTurn.pushExternalTask(Framing(maybeOtherTurn, dep))
+          LockSupport.unpark(maybeOtherTurn.userlandThread)
+        } else {
+          for(dep <- out) maybeOtherTurn.pushLocalTask(Framing(maybeOtherTurn, dep))
+        }
       case Deframe(out, maybeOtherTurn) =>
-        for(dep <- out) maybeOtherTurn.offer(Deframing(maybeOtherTurn, dep))
-        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
+        if(maybeOtherTurn != turn){
+          for(dep <- out) maybeOtherTurn.pushExternalTask(Deframing(maybeOtherTurn, dep))
+          LockSupport.unpark(maybeOtherTurn.userlandThread)
+        } else {
+          for(dep <- out) maybeOtherTurn.pushLocalTask(Deframing(maybeOtherTurn, dep))
+        }
       case FrameSupersede(out, maybeOtherTurn, supersede) =>
-        for(dep <- out) maybeOtherTurn.offer(SupersedeFraming(maybeOtherTurn, dep, supersede))
-        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
+        if(maybeOtherTurn != turn) {
+          for(dep <- out) maybeOtherTurn.pushExternalTask(SupersedeFraming(maybeOtherTurn, dep, supersede))
+          LockSupport.unpark(maybeOtherTurn.userlandThread)
+        } else {
+          for(dep <- out) maybeOtherTurn.pushLocalTask(SupersedeFraming(maybeOtherTurn, dep, supersede))
+        }
       case DeframeReframe(out, maybeOtherTurn, reframe) =>
-        for(dep <- out) maybeOtherTurn.offer(DeframeReframing(maybeOtherTurn, dep, reframe))
-        if(maybeOtherTurn != turn) LockSupport.unpark(maybeOtherTurn.userlandThread)
+        if(maybeOtherTurn != turn) {
+          for(dep <- out) maybeOtherTurn.pushExternalTask(DeframeReframing(maybeOtherTurn, dep, reframe))
+          LockSupport.unpark(maybeOtherTurn.userlandThread)
+        } else {
+          for(dep <- out) maybeOtherTurn.pushLocalTask(DeframeReframing(maybeOtherTurn, dep, reframe))
+        }
     }
   }
 

@@ -1,12 +1,14 @@
 package rescala.fullmv
 
+import java.util
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.{LockSupport, ReentrantReadWriteLock}
-import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, ThreadLocalRandom}
+import java.util.concurrent.{ConcurrentHashMap, ThreadLocalRandom}
 
 import rescala.core._
 import rescala.fullmv.NotificationResultAction.{GlitchFreeReady, NotGlitchFreeReady, NotificationOutAndSuccessorOperation}
 import rescala.fullmv.NotificationResultAction.NotificationOutAndSuccessorOperation.{NextReevaluation, NoSuccessor}
-import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation, ReevaluationResultHandling}
+import rescala.fullmv.tasks.{FullMVAction, Notification, Reevaluation}
 
 import scala.annotation.tailrec
 import scala.collection.mutable.ArrayBuffer
@@ -14,10 +16,20 @@ import scala.collection.mutable.ArrayBuffer
 class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends TurnImpl[FullMVStruct] {
   var initialChanges: collection.Map[ReSource[FullMVStruct], InitialChange[FullMVStruct]] = _
 
-  val taskQueue = new ConcurrentLinkedQueue[FullMVAction]()
-  def offer(action: FullMVAction): Unit = {
+  val externallyPushedTasks = new AtomicReference[List[FullMVAction]](Nil)
+  val localTaskQueue = new util.ArrayDeque[FullMVAction]()
+  def pushExternalTask(action: FullMVAction): Unit = {
     assert(action.turn == this, s"$this received task of different turn: $action")
-    taskQueue.offer(action)
+    @inline @tailrec def retryAdd(): Unit = {
+      val before = externallyPushedTasks.get
+      val update = action :: before
+      if(!externallyPushedTasks.compareAndSet(before, update)) retryAdd()
+    }
+    retryAdd()
+  }
+  def pushLocalTask(action: FullMVAction): Unit = {
+    assert(action.turn == this, s"$this received task of different turn: $action")
+    localTaskQueue.push(action)
   }
   val waiters = new ConcurrentHashMap[Thread, TurnPhase.Type]()
 
@@ -38,19 +50,30 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 //  val spinRestart = new java.util.HashSet[String]()
 //  val parkRestart = new java.util.HashSet[String]()
 
+  @tailrec private def runLocalQueue(): Unit = {
+    val head = localTaskQueue.poll()
+    if(head != null) {
+      assert(head.turn == this, s"local queue of $this contains different turn's $head")
+      head.compute()
+      runLocalQueue()
+    }
+  }
+
   private def awaitAndSwitchPhase(newPhase: TurnPhase.Type): Unit = {
     assert(newPhase > this.phase, s"$this cannot progress backwards to phase $newPhase.")
+    runLocalQueue()
     @inline @tailrec def awaitAndSwitchPhase0(firstUnknownPredecessorIndex: Int, parkAfter: Long, registeredForWaiting: FullMVTurn): Unit = {
-      val head = taskQueue.poll()
-      if (head != null) {
+      if (externallyPushedTasks.get != Nil) {
         if (registeredForWaiting != null) {
           registeredForWaiting.waiters.remove(this.userlandThread)
 //          parkRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
 //        } else if (parkAfter > 0) {
 //          spinRestart.add(head.asInstanceOf[ReevaluationResultHandling[ReSource[FullMVStruct]]].node.toString)
         }
-        assert(head.turn == this, s"task queue of $this contains different turn's $head")
-        head.compute()
+        val newTasksFromExternal = externallyPushedTasks.getAndSet(Nil).iterator
+        if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ingesting externally pushed tasks $newTasksFromExternal.")
+        while(newTasksFromExternal.hasNext) pushLocalTask(newTasksFromExternal.next())
+        runLocalQueue()
         awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, null)
       } else if (firstUnknownPredecessorIndex == selfNode.size) {
         assert(registeredForWaiting == null, s"$this is still registered on $registeredForWaiting as waiter despite having finished waiting for it")
@@ -59,7 +82,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
         // not be in the next phase yet. Only once that's sure we can also thread-safe sure
         // check that no predecessors pushed any tasks into our queue anymore. And only then
         // can we phase switch.
-        if (firstUnknownPredecessorIndex == selfNode.size && taskQueue.isEmpty) {
+        if (firstUnknownPredecessorIndex == selfNode.size && externallyPushedTasks.get == Nil) {
           this.phase = newPhase
           phaseLock.writeLock.unlock()
           val it = waiters.entrySet().iterator()
@@ -79,7 +102,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
           if (registeredForWaiting != null) {
             if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this parking for $currentUnknownPredecessor.")
             LockSupport.park(currentUnknownPredecessor)
-            if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this unparked.")
+            if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this unparked with external queue ${externallyPushedTasks.get}.")
             awaitAndSwitchPhase0(firstUnknownPredecessorIndex, 0L, currentUnknownPredecessor)
           } else {
             val now = System.nanoTime()
@@ -111,7 +134,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   private def beginPhase(phase: TurnPhase.Type): Unit = {
     assert(this.phase == TurnPhase.Initialized, s"$this already begun")
-    assert(taskQueue.isEmpty, s"$this cannot begin $phase: queue non empty!")
+    assert(localTaskQueue.isEmpty, s"$this cannot begin $phase: queue non empty!")
     assert(selfNode.size == 0, s"$this cannot begin $phase: already has predecessors!")
     if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this begun.")
     this.phase = phase
@@ -177,7 +200,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   }
 
   @tailrec private def awaitBranchCountZero(): Unit = {
-    val head = taskQueue.poll()
+    val head = localTaskQueue.poll()
     if(head != null) {
       assert(head.turn == this, s"$head in taskQueue of $this")
       head.compute()
@@ -238,7 +261,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 
   //========================================================ToString============================================================
 
-  override def toString: String = s"FullMVTurn($hc by ${if(userlandThread == null) "none" else userlandThread.getName}, ${TurnPhase.toString(phase)}${if(taskQueue.size() != 0) s"(${taskQueue.size()})" else ""})"
+  override def toString: String = s"FullMVTurn($hc by ${if(userlandThread == null) "none" else userlandThread.getName}, ${TurnPhase.toString(phase)}${if(!localTaskQueue.isEmpty || externallyPushedTasks.get.nonEmpty) s"(${localTaskQueue.size()}+${externallyPushedTasks.get.size})" else ""})"
 
   //========================================================Scheduler Interface============================================================
 
@@ -279,7 +302,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
         Reevaluation(this, reactive).compute()
       case NextReevaluation(out, succTxn) if out.isEmpty =>
         if (FullMVEngine.DEBUG) println(s"[${Thread.currentThread().getName}] $this ignite $reactive spawned reevaluation for successor $succTxn.")
-        succTxn.offer(Reevaluation(succTxn, reactive))
+        succTxn.pushExternalTask(Reevaluation(succTxn, reactive))
         LockSupport.unpark(succTxn.userlandThread)
       case otherOut: NotificationOutAndSuccessorOperation[FullMVTurn, Reactive[FullMVStruct]] if otherOut.out.isEmpty =>
         // ignore

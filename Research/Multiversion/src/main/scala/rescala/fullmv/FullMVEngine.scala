@@ -26,7 +26,7 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
       if (setWrites.nonEmpty) {
         // framing phase
         turn.beginFraming()
-        for (i <- setWrites) turn.offer(Framing(turn, i))
+        for (i <- setWrites) turn.pushLocalTask(Framing(turn, i))
         turn.completeFraming()
       } else {
         turn.beginExecuting()
@@ -39,13 +39,13 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
         case scala.util.Failure(e) => e.printStackTrace()
         case _ =>
       }
-      assert(turn.taskQueue.isEmpty, s"Admission phase left ${turn.taskQueue.size()} active branches.")
+      assert(turn.localTaskQueue.isEmpty, s"Admission phase left ${turn.localTaskQueue.size()} active branches.")
 
       // propagation phase
       if (setWrites.nonEmpty) {
         turn.initialChanges = admissionTicket.initialChanges
         for(write <- setWrites) {
-          turn.offer(SourceNotification(turn, write, admissionResult.isSuccess && admissionTicket.initialChanges.contains(write)))
+          turn.pushLocalTask(SourceNotification(turn, write, admissionResult.isSuccess && admissionTicket.initialChanges.contains(write)))
         }
       }
 

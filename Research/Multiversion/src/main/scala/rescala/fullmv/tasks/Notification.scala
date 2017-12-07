@@ -4,7 +4,7 @@ import rescala.core.{ReSource, Reactive}
 import rescala.fullmv.NotificationResultAction._
 import rescala.fullmv._
 
-trait NotificationAction[N <: ReSource[FullMVStruct]] extends ReevOutResultHandling[N] {
+trait NotificationAction[N <: ReSource[FullMVStruct]] extends ReevaluationHandling[N] {
   val changed: Boolean
   override def doCompute(): Unit = {
     val notificationResultAction = deliverNotification()
@@ -21,7 +21,7 @@ trait NotificationAction[N <: ReSource[FullMVStruct]] extends ReevOutResultHandl
       case NotGlitchFreeReady =>
         Traversable.empty
       case GlitchFreeReady =>
-        turn.offer(createReevaluation(turn))
+        doReevaluation()
       case outAndSucc: NotificationOutAndSuccessorOperation[FullMVTurn, Reactive[FullMVStruct]] =>
         processReevOutResult(outAndSucc, changed = false)
     }
@@ -30,16 +30,16 @@ trait NotificationAction[N <: ReSource[FullMVStruct]] extends ReevOutResultHandl
   def deliverNotification(): NotificationResultAction[FullMVTurn, Reactive[FullMVStruct]]
 }
 
-case class SourceNotification(override val turn: FullMVTurn, override val node: ReSource[FullMVStruct], override val changed: Boolean) extends NotificationAction[ReSource[FullMVStruct]] {
+case class SourceNotification(override val turn: FullMVTurn, override val node: ReSource[FullMVStruct], override val changed: Boolean) extends NotificationAction[ReSource[FullMVStruct]] with SourceReevaluationHandling {
   override def deliverNotification(): NotificationResultAction[FullMVTurn, Reactive[FullMVStruct]] = node.state.notify(turn, changed)
   override def createReevaluation(succTxn: FullMVTurn) = SourceReevaluation(succTxn, node)
 }
 
-case class Notification(override val turn: FullMVTurn, override val node: Reactive[FullMVStruct], override val changed: Boolean) extends NotificationAction[Reactive[FullMVStruct]] {
+case class Notification(override val turn: FullMVTurn, override val node: Reactive[FullMVStruct], override val changed: Boolean) extends NotificationAction[Reactive[FullMVStruct]] with RegularReevaluationHandling {
   override def deliverNotification(): NotificationResultAction[FullMVTurn, Reactive[FullMVStruct]] = node.state.notify(turn, changed)
   override def createReevaluation(succTxn: FullMVTurn) = Reevaluation(succTxn, node)
 }
-case class NotificationWithFollowFrame(override val turn: FullMVTurn, override val node: Reactive[FullMVStruct], override val changed: Boolean, followFrame: FullMVTurn) extends NotificationAction[Reactive[FullMVStruct]] {
+case class NotificationWithFollowFrame(override val turn: FullMVTurn, override val node: Reactive[FullMVStruct], override val changed: Boolean, followFrame: FullMVTurn) extends NotificationAction[Reactive[FullMVStruct]] with RegularReevaluationHandling {
   override def deliverNotification(): NotificationResultAction[FullMVTurn, Reactive[FullMVStruct]] = node.state.notifyFollowFrame(turn, changed, followFrame)
   override def createReevaluation(succTxn: FullMVTurn) = Reevaluation(succTxn, node)
 }

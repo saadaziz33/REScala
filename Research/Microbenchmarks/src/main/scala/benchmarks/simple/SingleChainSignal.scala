@@ -1,13 +1,11 @@
 package benchmarks.simple
 
-import java.util
 import java.util.concurrent.TimeUnit
 
 import benchmarks._
 import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.BenchmarkParams
 import rescala.core.{Engine, REName, Struct}
-import rescala.fullmv.FullMVTurn
 import rescala.reactives.{Signal, Var}
 
 @BenchmarkMode(Array(Mode.Throughput))
