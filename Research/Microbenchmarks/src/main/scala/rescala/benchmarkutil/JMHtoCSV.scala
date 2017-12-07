@@ -30,10 +30,10 @@ object JMHtoCSV {
               parameters = allParams.substring(allParams.indexOf('=') + 2).replaceAll(", [^=]+ = ", "\t")
               if(!outfiles.contains(benchmark)) {
                 outfiles += benchmark -> new FileWriter(benchmark + ".txt")
-                outfiles(benchmark).write("threads\t" + allParams.substring(0, allParams.lastIndexOf('=')).replaceAll(" = [^=]+, ", "\t") + "\tmeasurement\n")
+                outfiles(benchmark).write("srcfile\tthreads\t" + allParams.substring(0, allParams.lastIndexOf('=')).replaceAll(" = [^=]+, ", "\t") + "\tmeasurement\n")
               }
             case MEASUREMENT(integer, decimal) =>
-              outfiles(benchmark).write(threads + "\t" + parameters + "\t" + integer + "," + decimal + "\n")
+              outfiles(benchmark).write(fileName + "\t" + threads + "\t" + parameters + "\t" + integer + "," + decimal + "\n")
             case _ => // ignore
           }
         }
