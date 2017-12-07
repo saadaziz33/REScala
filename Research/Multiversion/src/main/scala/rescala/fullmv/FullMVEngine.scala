@@ -39,7 +39,7 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
         case scala.util.Failure(e) => e.printStackTrace()
         case _ =>
       }
-      assert(turn.localTaskQueue.isEmpty, s"Admission phase left ${turn.localTaskQueue.size()} active branches.")
+      assert(turn.taskQueue.isEmpty, s"Admission phase left ${turn.taskQueue.size()} active branches.")
 
       // propagation phase
       if (setWrites.nonEmpty) {
