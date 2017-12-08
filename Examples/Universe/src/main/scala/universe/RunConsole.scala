@@ -2,6 +2,8 @@ package universe
 
 import java.nio.file.{Files, Paths, StandardOpenOption}
 
+import rescala.reactives.Observe
+
 
 
 object RunConsole {
@@ -22,6 +24,8 @@ object RunConsole {
     for (repetition <- 0 to repetitions; threads <- threadCounts) {
       println(s"rep: $repetition, threads: $threads")
 
+      Observe.dereferenceAllStrongObserversWARNINGonlyUseThisIfYouKnowWhatYouAreDoing()
+      System.gc()
       Globals.setParallelism(threads)
 
       val world = new World(width, height)
