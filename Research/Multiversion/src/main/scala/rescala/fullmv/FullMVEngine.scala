@@ -51,7 +51,7 @@ class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[F
       }
 
       // wrap-up "phase" (executes in parallel with propagation)
-      admissionResult.map { i => admissionTicket.wrapUp(turn.makeWrapUpPhaseTicket()); i }
+      if(admissionTicket.wrapUp != null && admissionResult.isSuccess) admissionTicket.wrapUp(turn.makeWrapUpPhaseTicket())
 
       // turn completion
       turn.completeExecuting()
