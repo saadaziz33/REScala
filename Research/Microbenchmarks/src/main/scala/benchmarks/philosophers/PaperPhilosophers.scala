@@ -148,6 +148,21 @@ trait SignalTopper[S <: Struct] {
     }
 }
 
+trait TransposeTopper[S <: Struct] {
+  self: PaperPhilosophers[S] =>
+  import engine._
+
+  val individualCounts: Seq[Signal[Int]] =
+    for(i <- 0 until size) yield
+      REName.named(s"count($i)") { implicit ! =>
+        successes(i).fold(0) { (acc, _) => acc + 1 }
+      }
+  override val successCount: Signal[Int] = Signal {
+    individualCounts.map(_()).sum
+//    individualCounts.foldLeft(0){ (sum, signal) => sum + signal() }
+  }
+}
+
 object PaperPhilosophers {
   def main(args: Array[String]): Unit = {
     val tableSize = if(args.length >= 1) Integer.parseInt(args(0)) else 5
@@ -155,7 +170,7 @@ object PaperPhilosophers {
     val duration = if(args.length >= 3) Integer.parseInt(args(2)) else 0
 
     implicit val engine = new rescala.fullmv.FullMVEngine(Duration.Zero, s"PaperPhilosophers($tableSize,$threadCount)")
-    val table = new PaperPhilosophers(tableSize, engine, dynamicEdgeChanges = true) with SignalTopper[FullMVStruct]
+    val table = new PaperPhilosophers(tableSize, engine, dynamicEdgeChanges = true) with TransposeTopper[FullMVStruct]
 
 //    println("====================================================================================================")
 
