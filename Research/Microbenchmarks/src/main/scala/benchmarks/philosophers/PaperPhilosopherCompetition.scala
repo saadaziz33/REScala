@@ -53,6 +53,7 @@ class PaperCompetition[S <: Struct] extends BusyThreads {
     table = topper match {
       case "event" => new PaperPhilosophers(philosophers, engineParam.engine, dynamic) with EventTopper[S]
       case "signal" => new PaperPhilosophers(philosophers, engineParam.engine, dynamic) with SignalTopper[S]
+      case "transpose" => new PaperPhilosophers(philosophers, engineParam.engine, dynamic) with TransposeTopper[S]
       case otherwise => throw new IllegalArgumentException("not a valid topper: " + otherwise)
     }
 
