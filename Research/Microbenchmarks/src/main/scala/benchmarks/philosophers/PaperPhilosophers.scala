@@ -2,7 +2,7 @@ package benchmarks.philosophers
 
 import java.util.concurrent.{Executors, ThreadLocalRandom}
 
-import rescala.core.{Engine, REName, Struct}
+import rescala.core.{Engine, Pulse, REName, Struct}
 import rescala.fullmv.FullMVStruct
 import rescala.parrp.Backoff
 
@@ -152,15 +152,19 @@ trait TransposeTopper[S <: Struct] {
   self: PaperPhilosophers[S] =>
   import engine._
 
-  val individualCounts: Seq[Signal[Int]] =
-    for(i <- 0 until size) yield
-      REName.named(s"count($i)") { implicit ! =>
-        successes(i).fold(0) { (acc, _) => acc + 1 }
-      }
-  override val successCount: Signal[Int] = Signal {
-    individualCounts.map(_()).sum
-//    individualCounts.foldLeft(0){ (sum, signal) => sum + signal() }
-  }
+//  val individualCounts: Seq[Signal[Int]] =
+//    for(i <- 0 until size) yield
+//      REName.named(s"count($i)") { implicit ! =>
+//        successes(i).fold(0) { (acc, _) => acc + 1 }
+//      }
+//  override val successCount: Signal[Int] = Signal {
+//    individualCounts.map(_()).sum
+////    individualCounts.foldLeft(0){ (sum, signal) => sum + signal() }
+//  }
+  override val successCount: Signal[Int] = {
+  val t = implicitly[CreationTicket]
+  t{ Signals.staticFold[Int, S](successes.toSet[ReSource], Pulse.Value(0)) { (ticket, before) => before() + 1 } (_)(t.rename) }
+}
 }
 
 object PaperPhilosophers {
