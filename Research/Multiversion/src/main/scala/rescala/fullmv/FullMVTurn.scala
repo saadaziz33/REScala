@@ -29,7 +29,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
   }
   def pushLocalTask(action: FullMVAction): Unit = {
     assert(action.turn == this, s"$this received task of different turn: $action")
-    localTaskQueue.push(action)
+    localTaskQueue.addLast(action)
   }
   val waiters = new ConcurrentHashMap[Thread, TurnPhase.Type]()
 
@@ -51,7 +51,7 @@ class FullMVTurn(val engine: FullMVEngine, val userlandThread: Thread) extends T
 //  val parkRestart = new java.util.HashSet[String]()
 
   @tailrec private def runLocalQueue(): Unit = {
-    val head = localTaskQueue.poll()
+    val head = localTaskQueue.pollFirst()
     if(head != null) {
       assert(head.turn == this, s"local queue of $this contains different turn's $head")
       head.compute()
