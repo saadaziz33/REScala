@@ -1,13 +1,13 @@
 package rescala.crdts.pvars
 
 import rescala._
-import rescala.crdts.statecrdts.sequences.RGOA
+import rescala.crdts.statecrdts.sequences.{RGOA, Vertex}
 
 case class PGrowOnlyLog[A](initial: RGOA[A] = RGOA[A](),
                            internalChanges: Evt[RGOA[A]] = Evt[RGOA[A]],
                            externalChanges: Evt[RGOA[A]] = Evt[RGOA[A]]) extends Publishable[RGOA[A]] {
 
-  def append(a: A): Unit = internalChanges(crdtSignal.now.append(Vertex(a)))
+  def append(a: A): Unit = internalChanges.fire(crdtSignal.now.append(Vertex(a)))
 
   def contains(a: A): Boolean = crdtSignal.now.containsValue(a)
 

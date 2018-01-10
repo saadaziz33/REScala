@@ -6,12 +6,38 @@ maxErrors := 5
 crossScalaVersions := Seq(cfg.version_211, cfg.version_212)
 (incOptions in ThisBuild) := (incOptions in ThisBuild).value.withLogRecompileOnMacro(false)
 
-lazy val rescalaAggregate = project.in(file(".")).settings(cfg.base).aggregate(rescalaJVM,
-  rescalaJS, microbench, reswing, examples, examplesReswing, caseStudyEditor,
-  caseStudyRSSEvents, caseStudyRSSReactive, caseStudyRSSSimple, rescalatags,
-  datastructures, universe, reactiveStreams, documentation,
-  stm, testToolsJVM, testToolsJS, testsJVM, testsJS, caseStudyShapes, caseStudyMill,
-  dividi, paroli)
+lazy val rescalaAggregate = project.in(file(".")).settings(cfg.base).aggregate(
+  caseStudyEditor,
+  caseStudyMill,
+  caseStudyRSSEvents,
+  caseStudyRSSReactive,
+  caseStudyRSSSimple,
+  caseStudyShapes,
+  crdts,
+  datastructures,
+  //distributedFullmv,
+  dividi,
+  documentation,
+  examples,
+  examplesReswing,
+  fullmv,
+  //meta,
+  microbench,
+  paroli,
+  pongDemo,
+  reactiveStreams,
+  rescalaJS,
+  rescalaJVM,
+  rescalafx,
+  rescalatags,
+  reswing,
+  stm,
+  testToolsJS,
+  testToolsJVM,
+  testsJS,
+  testsJVM,
+  todolist,
+  universe)
   .settings(cfg.noPublish)
 
 
@@ -50,7 +76,8 @@ lazy val testsJVM = tests.jvm.dependsOn(testToolsJVM % "test->test", stm)
 lazy val testsJS = tests.js.dependsOn(testToolsJS % "test->test")
 
 lazy val documentation = project.in(file("Documentation/DocumentationProject"))
-  .settings(cfg.base, cfg.noPublish)
+  .settings(cfg.base, cfg.noPublish,
+    scalacOptions += "-Xlint:-unused")
   .enablePlugins(TutPlugin)
   .dependsOn(rescalaJVM, rescalaJS)
 
@@ -61,25 +88,19 @@ lazy val reactiveStreams = project.in(file("Extensions/ReactiveStreams"))
   .settings(cfg.base, cfg.noPublish, lib.reactivestreams)
   .dependsOn(rescalaJVM)
 
-lazy val reandroidthings = project.in(file("Extensions/REAndroidThings"))
-  .settings(name := "reandroidthings",cfg.base, cfg.noPublish,
-    javacOptions ++= Seq("-source", "1.7", "-target", "1.7"))
-  .enablePlugins(AndroidLib)
-  .dependsOn(rescalaJVM)
-
 lazy val reswing = project.in(file("Extensions/RESwing"))
   .settings(name := "reswing", cfg.base, cfg.bintray, cfg.strictScalac, lib.scalaswing)
   .dependsOn(rescalaJVM)
 
 lazy val rescalatags = project.in(file("Extensions/Rescalatags"))
   .settings(cfg.base, cfg.strictScalac, cfg.bintray, cfg.test,
-    cfg.js, lib.scalatags, jsEnv := new org.scalajs.jsenv.jsdomnodejs.JSDOMNodeJSEnv)
+    cfg.js, lib.scalatags, jsDependencies += RuntimeDOM)
   .enablePlugins(ScalaJSPlugin)
   .dependsOn(rescalaJS)
 
 lazy val datastructures = project.in(file("Extensions/Datastructures"))
   .dependsOn(rescalaJVM)
-  .settings(cfg.base, name := "datastructures", lib.scalatest, cfg.noPublish)
+  .settings(cfg.base, name := "datastructures", lib.scalatest, cfg.noPublish, cfg.strictScalac)
 
 lazy val stm = project.in(file("Extensions/STM"))
   .settings(cfg.base, cfg.noPublish, lib.scalaStm)
@@ -87,7 +108,7 @@ lazy val stm = project.in(file("Extensions/STM"))
 
 lazy val crdts = project.in(file("Extensions/crdts"))
   .dependsOn(rescalaJVM)
-  .settings(name := "recrdt", cfg.base, cfg.noPublish, cfg.mappingFilters, lib.akka, lib.scalaLogback)
+  .settings(name := "recrdt", cfg.base, cfg.noPublish, cfg.mappingFilters, lib.akka, lib.scalaLogback, cfg.strictScalac)
 
 lazy val rescalafx = project.in(file("Extensions/javafx"))
   .dependsOn(rescalaJVM)
@@ -107,18 +128,6 @@ lazy val examplesReswing = project.in(file("Examples/examples-reswing"))
   .dependsOn(reswing)
   .settings(name := "reswing-examples", cfg.base, cfg.noPublish)
 
-
-lazy val baromter4Android = project.in(file("Examples/Barometer4Android"))
-  .enablePlugins(AndroidApp)
-  .dependsOn(reandroidthings)
-  .settings(cfg.base, cfg.noPublish,
-    name := "barometer4Android",
-    javacOptions ++= Seq("-source", "1.7", "-target", "1.7"),
-    lib.android,
-    platformTarget := "android-25", //TODO: Move to androidJVM
-    android.useSupportVectors,
-    instrumentTestRunner := "android.support.test.runner.AndroidJUnitRunner")
-
 lazy val caseStudyEditor = project.in(file("Examples/Editor"))
   .dependsOn(reswing)
   .settings(name := "editor-case-study", cfg.base, cfg.noPublish)
@@ -137,7 +146,8 @@ lazy val caseStudyRSSSimple = project.in(file("Examples/RSSReader/SimpleRssReade
 
 lazy val universe = project.in(file("Examples/Universe"))
   .dependsOn(rescalaJVM, stm, fullmv)
-  .settings(cfg.base, cfg.noPublish, name := "rescala-universe", com.typesafe.sbt.SbtStartScript.startScriptForClassesSettings)
+  .settings(cfg.base, cfg.noPublish, name := "rescala-universe")
+  .enablePlugins(JavaAppPackaging)
 
 lazy val caseStudyShapes = project.in(file("Examples/Shapes"))
   .dependsOn(reswing)
@@ -154,11 +164,11 @@ lazy val todolist = project.in(file("Examples/Todolist"))
 
 lazy val dividi = project.in(file("Examples/dividi"))
   .dependsOn(crdts)
-  .settings(name := "dividi", cfg.base, cfg.noPublish, cfg.mappingFilters, lib.akka, lib.scalaLogback, lib.scalafx)
+  .settings(name := "dividi", cfg.base, cfg.noPublish, cfg.mappingFilters, lib.akka, lib.scalaLogback, lib.scalafx, cfg.strictScalac)
 
 lazy val paroli = project.in(file("Examples/paroli-chat"))
   .dependsOn(crdts)
-  .settings(name := "paroli-chat", cfg.base, cfg.noPublish, cfg.mappingFilters, lib.akka, lib.scalaLogback, lib.jline)
+  .settings(name := "paroli-chat", cfg.base, cfg.noPublish, cfg.mappingFilters, lib.akka, lib.scalaLogback, lib.jline, cfg.strictScalac)
 
 
 // ===================================================================================== Research
@@ -168,20 +178,20 @@ lazy val fullmv = project.in(file("Research/Multiversion"))
     cfg.test, cfg.noPublish)
   .dependsOn(rescalaJVM, testToolsJVM % "test->test")
 
-lazy val distributedFullmv = project.in(file("Research/MultiversionDistribution"))
-  .settings( cfg.base, name := "rescala-distributed-multiversion",
-    cfg.test, cfg.noPublish, lib.retierTransmitter)
-  .dependsOn(fullmv, testToolsJVM % "test->test")
-
-lazy val meta = project.in(file("Research/Meta"))
-  .dependsOn(rescalaJVM)
-  .settings(cfg.base, cfg.test, cfg.noPublish, name := "meta")
+//lazy val distributedFullmv = project.in(file("Research/MultiversionDistribution"))
+//  .settings( cfg.base, name := "rescala-distributed-multiversion",
+//    cfg.test, cfg.noPublish, lib.retierTransmitter)
+//  .dependsOn(fullmv, testToolsJVM % "test->test")
+//
+//lazy val meta = project.in(file("Research/Meta"))
+//  .dependsOn(rescalaJVM)
+//  .settings(cfg.base, cfg.test, cfg.noPublish, name := "meta")
 
 lazy val microbench = project.in(file("Research/Microbenchmarks"))
   .enablePlugins(JmhPlugin)
   .settings(name := "microbenchmarks", cfg.base, cfg.noPublish, mainClass in Compile := Some("org.openjdk.jmh.Main"),
-    com.typesafe.sbt.SbtStartScript.startScriptForClassesSettings,
     TaskKey[Unit]("compileJmh") := Seq(compile in pl.project13.scala.sbt.SbtJmh.JmhKeys.Jmh).dependOn.value)
+  .enablePlugins(JavaAppPackaging)
   .dependsOn(stm, fullmv)
 
 
@@ -190,12 +200,12 @@ lazy val microbench = project.in(file("Research/Microbenchmarks"))
 lazy val cfg = new {
 
   val version_211 = "2.11.11"
-  val version_212 = "2.12.3"
+  val version_212 = "2.12.4"
 
 
   val base = List(
     organization := "de.tuda.stg",
-    version := "0.20.0-SNAPSHOT",
+    version := "0.21.0-SNAPSHOT",
     scalaVersion := version_212,
     baseScalac,
     autoAPIMappings := true // scaladoc
@@ -207,12 +217,48 @@ lazy val cfg = new {
     lib.scalatest
   )
 
-  val bintray = List(
+
+  /*
+  * Have your Bintray credentials stored as
+    [documented here](http://www.scala-sbt.org/1.0/docs/Publishing.html#Credentials),
+    using realm `Bintray API Realm` and host `api.bintray.com`
+  * Log in to Bintray and publish the files that were sent
+  */
+  lazy val bintray = Seq(
+    publishArtifact in Compile := true,
+    publishArtifact in Test := false,
     licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0")),
-    bintrayOrganization := Some("stg-tud")
+    scmInfo := Some(
+      ScmInfo(
+        browseUrl = url("https://github.com/guidosalva/REScala/"),
+        connection =
+          "scm:git:git@github.com:guidosalva/REScala.git"
+      )
+    ),
+    // Publish to Bintray, without the sbt-bintray plugin
+    publishMavenStyle := true,
+    publishTo := {
+      val proj = moduleName.value
+      val ver  = version.value
+      if (isSnapshot.value) {
+        None // Bintray does not support snapshots
+      } else {
+        val url = new java.net.URL(
+          s"https://api.bintray.com/content/stg-tud/maven/$proj/$ver")
+        val patterns = Resolver.ivyStylePatterns
+        Some(Resolver.url("bintray", url)(patterns))
+      }
+    }
   )
 
-  val noPublish = List(
+  // val bintrayPlugin = List(
+  //   licenses += ("Apache-2.0", url("http://www.apache.org/licenses/LICENSE-2.0")),
+  //   bintrayOrganization := Some("stg-tud")
+  // )
+
+  lazy val noPublish = Seq(
+    publishArtifact := false,
+    packagedArtifacts := Map.empty,
     publish := {},
     publishLocal := {}
   )
@@ -254,7 +300,7 @@ lazy val cfg = new {
       val types = 1 to i map ("A" + _)
       val signals = params zip types map { case (p, t) => s"$p: Signal[$t, S]" }
       def sep(l: Seq[String]) = l.mkString(", ")
-      val getValues = params map (v => s"t.staticDepend($v).get")
+      val getValues = params map (v => s"t.staticDepend($v)")
       s"""  def lift[${sep(types)}, B, S <: Struct](${sep(signals)})(fun: (${sep(types)}) => B)(implicit maybe: CreationTicket[S]): Signal[B, S] = {
          |    static(${sep(params)})(t => fun(${sep(getValues)}))
          |  }
@@ -284,19 +330,13 @@ lazy val cfg = new {
 
 lazy val lib = new {
 
-  lazy val android = libraryDependencies ++= Seq(
-    "com.android.support" % "appcompat-v7" % "25.3.1",
-    "com.android.support.test" % "runner" % "0.5" % "androidTest",
-    "com.android.support.test.espresso" % "espresso-core" % "2.2.2" % "androidTest",
-    scalaOrganization.value % "scala-reflect" % scalaVersion.value)
-
   lazy val rss = libraryDependencies ++= Seq(
     "joda-time" % "joda-time" % "2.9.9",
-    "org.joda" % "joda-convert" % "1.8.3",
+    "org.joda" % "joda-convert" % "1.9.2",
     "org.codehaus.jsr166-mirror" % "jsr166y" % "1.7.0",
     "org.scala-lang.modules" %% "scala-xml" % "1.0.6")
 
-  lazy val scalaswing = libraryDependencies += "org.scala-lang.modules" %% "scala-swing" % "2.0.0"
+  lazy val scalaswing = libraryDependencies += "org.scala-lang.modules" %% "scala-swing" % "2.0.1"
   lazy val scalatest = libraryDependencies += "org.scalatest" %%% "scalatest" % "3.0.4" % "test"
 
 
@@ -309,8 +349,8 @@ lazy val lib = new {
   }
 
   val reactivestreams = libraryDependencies ++= List(
-    "org.reactivestreams" % "reactive-streams" % "1.0.1",
-    "org.reactivestreams" % "reactive-streams-tck" % "1.0.1"
+    "org.reactivestreams" % "reactive-streams" % "1.0.2",
+    "org.reactivestreams" % "reactive-streams-tck" % "1.0.2"
   )
 
   val scalaStm = libraryDependencies += "org.scala-stm" %% "scala-stm" % "0.8"
@@ -326,10 +366,10 @@ lazy val lib = new {
 
   val scalaXml = libraryDependencies += "org.scala-lang.modules" %% "scala-xml" % "1.0.6"
 
-  val scalatags = libraryDependencies += "com.lihaoyi" %%% "scalatags" % "0.6.5"
+  val scalatags = libraryDependencies += "com.lihaoyi" %%% "scalatags" % "0.6.7"
 
   val akka = {
-    val akkaVersion = "2.5.4"
+    val akkaVersion = "2.5.8"
     // akka:
     libraryDependencies ++= Seq(
       "com.typesafe.akka" %% "akka-slf4j" % akkaVersion,
@@ -347,7 +387,7 @@ lazy val lib = new {
   )
 
   val scalafx = Seq(
-    libraryDependencies += "org.scalafx" %% "scalafx" % "8.0.102-R11",
+    libraryDependencies += "org.scalafx" %% "scalafx" % "8.0.144-R12",
     scalaswing,
     unmanagedJars in Compile += Attributed.blank(file(System.getenv("JAVA_HOME") + "/lib/ext/jfxrt.jar"))
   )
@@ -360,3 +400,4 @@ lazy val lib = new {
     libraryDependencies += "de.tuda.stg" %% "retier-serializer-upickle" % "0.0.1-SNAPSHOT" % "test")
 
 }
+

@@ -2,10 +2,13 @@ package rescala.reactives
 
 import rescala.core.Pulse.{Exceptional, NoChange, Value}
 import rescala.core._
+import rescala.macros.ReactiveMacros
+import scala.language.experimental.macros
 import rescala.reactives.RExceptions.UnhandledFailureException
 
 import scala.annotation.compileTimeOnly
 import scala.collection.immutable.{LinearSeq, Queue}
+
 
 /**
   * Base signal interface for all signal implementations.
@@ -25,19 +28,21 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
   def ! : Option[T] = throw new IllegalAccessException(s"$this.! called outside of macro")
   @compileTimeOnly("Event.unary_! can only be used inside of Signal expressions")
   def unary_! : Option[T] = throw new IllegalAccessException(s"$this.unary_! called outside of macro")
+  @compileTimeOnly("Event.value can only be used inside of Signal expressions")
+  def value : Option[T] = throw new IllegalAccessException(s"$this.value called outside of macro")
 
   def disconnect()(implicit engine: Engine[S]): Unit
 
 
   /** collect results from a partial function */
-  final def collect[U](pf: PartialFunction[T, U])(implicit ticket: CreationTicket[S]): Event[U, S] = Events.static(s"(collect $this)", this) { st => st.staticDepend(this).collect(pf) }
+  final def collect[U](pf: PartialFunction[T, U])(implicit ticket: CreationTicket[S]): Event[U, S] = Events.staticInternal(s"(collect $this)", this) { st => st.staticDependPulse(this).collect(pf) }
 
   /** add an observer */
   final def +=(react: T => Unit)(implicit ticket: CreationTicket[S]): Observe[S] = observe(react)(ticket)
 
 
-  final def recover[R >: T](onFailure: PartialFunction[Throwable,Option[R]])(implicit ticket: CreationTicket[S]): Event[R, S] = Events.static(s"(recover $this)", this) { st =>
-    st.staticDepend(this) match {
+  final def recover[R >: T](onFailure: PartialFunction[Throwable,Option[R]])(implicit ticket: CreationTicket[S]): Event[R, S] = Events.staticInternal(s"(recover $this)", this) { st =>
+    st.staticDependPulse(this) match {
       case Exceptional(t) => onFailure.applyOrElse[Throwable, Option[R]](t, throw _).fold[Pulse[R]](Pulse.NoChange)(Pulse.Value(_))
       case other => other
     }
@@ -46,25 +51,24 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
 
   final def abortOnError()(implicit ticket: CreationTicket[S]): Event[T, S] = recover{case t => throw new UnhandledFailureException(this, t)}
 
-
   /** Events disjunction. */
   final def ||[U >: T](other: Event[U, S])(implicit ticket: CreationTicket[S]): Event[U, S] = {
-    Events.static(s"(or $this $other)", this, other) { st =>
-      val tp = st.staticDepend(this)
-      if (tp.isChange) tp else st.staticDepend(other)
+    Events.staticInternal(s"(or $this $other)", this, other) { st =>
+      val tp = st.staticDependPulse(this)
+      if (tp.isChange) tp else st.staticDependPulse(other)
     }
   }
 
   /** EV filtered with a predicate */
-  final def filter(pred: T => Boolean)(implicit ticket: CreationTicket[S]): Event[T, S] = Events.static(s"(filter $this)", this) { st => st.staticDepend(this).filter(pred) }
+  final def filter(pred: T => Boolean)(implicit ticket: CreationTicket[S]): Event[T, S] = Events.staticInternal(s"(filter $this)", this) { st => st.staticDependPulse(this).filter(pred) }
   /** EV filtered with a predicate */
   final def &&(pred: T => Boolean)(implicit ticket: CreationTicket[S]): Event[T, S] = filter(pred)
 
   /** EV is triggered except if the other one is triggered */
   final def \[U](except: Event[U, S])(implicit ticket: CreationTicket[S]): Event[T, S] = {
-    Events.static(s"(except $this  $except)", this, except) { st =>
-      st.staticDepend(except) match {
-        case NoChange => st.staticDepend(this)
+    Events.staticInternal(s"(except $this  $except)", this, except) { st =>
+      st.staticDependPulse(except) match {
+        case NoChange => st.staticDependPulse(this)
         case Value(_) => Pulse.NoChange
         case ex@Exceptional(_) => ex
       }
@@ -73,10 +77,10 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
 
   /** Events conjunction */
   final def and[U, R](other: Event[U, S])(merger: (T, U) => R)(implicit ticket: CreationTicket[S]): Event[R, S] = {
-    Events.static(s"(and $this $other)", this, other) { st =>
+    Events.staticInternal(s"(and $this $other)", this, other) { st =>
       for {
-        left <- st.staticDepend(this)
-        right <- st.staticDepend(other)
+        left <- st.staticDependPulse(this)
+        right <- st.staticDependPulse(other)
       } yield {merger(left, right)}
     }
   }
@@ -86,29 +90,30 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
 
   /** Event disjunction with a merge method creating a tuple of both optional event parameters wrapped */
   final def zipOuter[U](other: Event[U, S])(implicit ticket: CreationTicket[S]): Event[(Option[T], Option[U]), S] = {
-    Events.static(s"(zipOuter $this $other)", this, other) { st =>
-      val left = st.staticDepend(this)
-      val right = st.staticDepend(other)
+    Events.staticInternal(s"(zipOuter $this $other)", this, other) { st =>
+      val left = st.staticDependPulse(this)
+      val right = st.staticDependPulse(other)
       if(right.isChange || left.isChange) Value(left.toOption -> right.toOption) else NoChange
     }
   }
 
+  final def map[A](expression: T => A)(implicit ticket: CreationTicket[S]): Event[A, S] = macro ReactiveMacros.EventMapMacro[T, A, S]
   /** Transform the event parameter */
-  final def map[U](mapping: T => U)(implicit ticket: CreationTicket[S]): Event[U, S] = Events.static(s"(map $this)", this) {  st => st.staticDepend(this).map(mapping) }
+  final def staticMap[U](mapping: T => U)(implicit ticket: CreationTicket[S]): Event[U, S] = Events.staticInternal(s"(map $this)", this) {  st => st.staticDependPulse(this).map(mapping) }
 
   final def dMap[U](mapping: DynamicTicket[S] => T => U)(implicit ticket: CreationTicket[S]): Event[U, S] = Events.dynamic(this) {
     dt => dt.depend(this).map(v => mapping(dt)(v))
   }
 
   /** Drop the event parameter; equivalent to map((_: Any) => ()) */
-  final def dropParam(implicit ticket: CreationTicket[S]): Event[Unit, S] = map(_ => ())
+  final def dropParam(implicit ticket: CreationTicket[S]): Event[Unit, S] = staticMap(_ => ())
 
 
   /** folds events with a given fold function to create a Signal */
   final def fold[A: ReSerializable](init: A)(folder: (A, T) => A)(implicit ticket: CreationTicket[S]): Signal[A, S] = {
     ticket { initialTurn =>
       Signals.staticFold[A, S](Set(this), Pulse.tryCatch(Pulse.Value(init))) { (st, currentValue) =>
-        val value = st.staticDepend(this).get
+        val value = st.staticDependPulse(this).get
         folder(currentValue(), value)
       }(initialTurn)(ticket.rename)
     }
@@ -118,7 +123,7 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
   final def reduce[A: ReSerializable](reducer: (=> A, => T) => A)(implicit ticket: CreationTicket[S]): Signal[A, S] =
     ticket { initialTurn =>
       Signals.staticFold[A, S](Set(this), Pulse.empty) { (st, currentValue) =>
-        reducer(currentValue(), st.staticDepend(this).get)
+        reducer(currentValue(), st.staticDependPulse(this).get)
       }(initialTurn)(ticket.rename)
     }
 
@@ -161,7 +166,7 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
     */
   final def last[T1 >: T](n: Int)(implicit ticket: CreationTicket[S], ev: ReSerializable[Queue[T1]]): Signal[LinearSeq[T1], S] = {
     fold(Queue[T1]()) { (queue: Queue[T1], v: T) =>
-      if (queue.length >= n) queue.tail.enqueue(v) else queue.enqueue(v)
+      if (queue.lengthCompare(n) >= 0) queue.tail.enqueue(v) else queue.enqueue(v)
     }
   }
 
@@ -172,26 +177,16 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
   /** Switch back and forth between two signals on occurrence of event e */
   final def toggle[A](a: Signal[A, S], b: Signal[A, S])(implicit ticket: CreationTicket[S], ev: ReSerializable[Boolean]): Signal[A, S] = ticket { ict =>
     val switched: Signal[Boolean, S] = iterate(false) {!_}(ev, ict)
-    Signals.dynamic(switched, a, b) { s => if (s.dynamicDepend(switched).get) s.dynamicDepend(b).get else s.dynamicDepend(a).get }(ict)
+    Signals.dynamic(switched, a, b) { s => if (s.dependDynamic(switched).get) s.dependDynamic(b).get else s.dependDynamic(a).get }(ict)
   }
-
-  /** Return a Signal that is updated only when e fires, and has the value of the signal s */
-  final def snapshot[A: ReSerializable](s: Signal[A, S])(implicit ticket: CreationTicket[S]): Signal[A, S] = ticket { ct =>
-    Signals.staticFold[A, S](
-      Set(this, s),
-      ct.dynamicBefore(s)) { (st, current) =>
-      st.staticDepend(this).toOption.fold(current())(_ => st.staticDepend(s).get)
-    }(ct)(ticket.rename)
-  }
-
 
   /** Switch to a new Signal once, on the occurrence of event e. */
   final def switchOnce[A, T1 >: T](original: Signal[A, S], newSignal: Signal[A, S])(implicit ticket: CreationTicket[S], ev: ReSerializable[Option[T1]]): Signal[A, S] = ticket { turn =>
     val latest = latestOption[T1]()(turn, ev)
     Signals.dynamic(latest, original, newSignal) { t =>
-      t.dynamicDepend(latest).get match {
-        case None => t.dynamicDepend(original).get
-        case Some(_) => t.dynamicDepend(newSignal).get
+      t.dependDynamic(latest).get match {
+        case None => t.dependDynamic(original).get
+        case Some(_) => t.dependDynamic(newSignal).get
       }
     }(turn)
   }
@@ -204,18 +199,11 @@ trait Event[+T, S <: Struct] extends ReSourciV[Pulse[T], S] with Observable[T, S
   final def switchTo[T1 >: T](original: Signal[T1, S])(implicit ticket: CreationTicket[S], ev: ReSerializable[Option[T1]]): Signal[T1, S] = ticket { turn =>
     val latest = latestOption[T1]()(turn, ev)
     Signals.dynamic(latest, original) { s =>
-      s.dynamicDepend(latest).get match {
-        case None => s.dynamicDepend(original).get
+      s.dependDynamic(latest).get match {
+        case None => s.dependDynamic(original).get
         case Some(x) => x
       }
     }(turn)
-  }
-
-  /** Like latest, but delays the value of the resulting signal by n occurrences */
-  final def delay[T1 >: T](init: => T1, n: Int)(implicit ticket: CreationTicket[S], ev : ReSerializable[Queue[T1]]): Signal[T1, S] = ticket { turn =>
-    lazy val initL = init
-    val history: Signal[LinearSeq[T1], S] = last[T1](n + 1)(turn, ev)
-    history.map { h => if (h.size <= n) initL else h.head }(turn)
   }
 
 }

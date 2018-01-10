@@ -14,24 +14,28 @@ use Data::Dumper;
 my $MAINDIR = dirname(__FILE__);
 chdir $MAINDIR;
 
-my $EXECUTABLE = './target/start';
+my $EXECUTABLE = './target/universal/stage/bin/microbenchmarks';
 if ($OSNAME eq "MSWin32") {
   $EXECUTABLE =~ s#/#\\#g;
 }
 my $OUTDIR = 'out';
 my $RESULTDIR = 'results';
-my $BSUB_TIME = "0:55:00";
-my $BSUB_REQUIRE = "avx&mpi";
-my $BSUB_CORES = "16";
+my $SCHEDULER_TIME = "0:55:00";
+my $SCHEDULER_REQUIRE = "avx\\&mpi";
+my $SCHEDULER_CORES = "16";
 
-my @ENGINES = qw<parrp stm synchron locksweep>;
-my @ENGINES_UNMANAGED = (@ENGINES, "unmanaged");
-my @THREADS = (1..16);
+# my @ENGINES = qw<parrp stm synchron locksweep>;
+my @ENGINES = qw<synchron>;
+# my @ENGINES_UNMANAGED = (@ENGINES, "unmanaged");
+my @ENGINES_UNMANAGED = (@ENGINES);
+my @ENGINES_SNAPSHOTS = ("synchron", "restoring");
+my @THREADS = (1);
 my @REDUCED_THREADS = (8);
 my @STEPS = (1,8,16,24,32,64);
-my @SIZES = (10,100,1000);
+my @SIZES = (100);
 my @CHATSERVERSIZES = (1,2,4,8,16,32);
 my @PHILOSOPHERS = (16, 32, 64, 128);
+my @SNAPSHOT_FOLDPERCENT = map {$_ / 10} (0..10);
 my @LAYOUTS = qw<alternating>;
 my %BASECONFIG = (
   # global locking does not deal well with sync iterations
@@ -56,8 +60,8 @@ my $GITREF = qx[git show -s --format=%H HEAD];
 chomp $GITREF;
 
 my $command = shift @ARGV;
-my @RUN = @ARGV ? @ARGV : qw<philosophers halfDynamicPhilosophers simplePhil expensiveConflict singleDynamic singleVar turnCreation simpleFan simpleReverseFan simpleNaturalGraph multiReverseFan stmbank chatServer simpleChain dynamicStacks noconflictPhilosophers>;
-
+# my @RUN = @ARGV ? @ARGV : qw<philosophers halfDynamicPhilosophers simplePhil expensiveConflict singleDynamic singleVar turnCreation simpleFan simpleReverseFan simpleNaturalGraph multiReverseFan stmbank chatServer simpleChain dynamicStacks noconflictPhilosophers>;
+my @RUN = @ARGV ? @ARGV : qw<snapshotOverhead snapshotRestoringVsInitial snapshotRestoringVsRecomputation errorPropagationVsMonadic simpleNaturalGraph>;
 say "selected: " . (join " ", sort @RUN);
 say "available: " . (join " ", sort keys %{&selection()});
 
@@ -77,9 +81,8 @@ sub init {
   mkdir $OUTDIR;
   chdir "../..";
 
-  system('./sbt', 'set scalacOptions in ThisBuild ++= List("-Xdisable-assertions", "-Xelide-below", "9999999")', 'project microbench', 'stage', 'compileJmh', 'project universe', 'start-script');
-  qx[perl -p -i -e 's#exec java \\\$JAVA_OPTS -cp "#exec java \\\$JAVA_OPTS -cp "\\\$PROJECT_DIR/Research/Microbenchmarks/target/scala-2.11/jmh-classes:#g' ./Research/Microbenchmarks/target/start];
-  #system('sbt','clean', 'jmh:compile', 'jmh:stage');
+  system('./sbt', 'set scalacOptions in ThisBuild ++= List("-Xdisable-assertions", "-Xelide-below", "9999999")',
+    'project microbench', 'jmh:compile', 'jmh:stage', 'project universe', 'start-script');
   chdir $MAINDIR;
 }
 
@@ -106,9 +109,9 @@ sub submitAllAsOne {
 
 sub submit {
   my ($job) = @_;
-  open (my $BSUB, "|-", qq[sbatch --exclusive -n 1 -c $BSUB_CORES -C $BSUB_REQUIRE -t $BSUB_TIME ]);
-  print $BSUB $job;
-  close $BSUB;
+  open (my $SCHEDULER, "|-", qq[sbatch --exclusive -n 1 -c $SCHEDULER_CORES -C $SCHEDULER_REQUIRE -t $SCHEDULER_TIME ]);
+  print $SCHEDULER $job;
+  close $SCHEDULER;
 }
 
 sub makeRunString {
@@ -628,6 +631,81 @@ sub selection {
       @runs;
     },
 
+    snapshotOverhead => sub {
+      my @runs;
+
+      my $name = "snapshotOverhead";
+      my $program = makeRunString( $name,
+        fromBaseConfig(
+          p => { # parameters
+            engineName => (join ',', @ENGINES_SNAPSHOTS),
+            size => (join ",", @SIZES),
+            foldPercent => (join ",", @SNAPSHOT_FOLDPERCENT)
+          },
+          t => 1,
+        ),
+        "benchmarks.restoring.RestoringSimple"
+      );
+      push @runs, {name => $name, program => $program};
+
+      @runs;
+    },
+
+    snapshotRestoringVsInitial => sub {
+      my @runs;
+
+      my $name = "RestoringSnapshotVsInitial";
+      my $program = makeRunString( $name,
+        fromBaseConfig(
+          p => { # parameters
+            size => (join ",", @SIZES),
+          },
+          t => 1,
+        ),
+        "benchmarks.restoring.RestoringSnapshotVsInitial"
+      );
+      push @runs, {name => $name, program => $program};
+
+      @runs;
+    },
+
+    snapshotRestoringVsRecomputation => sub {
+      my @runs;
+
+      my $name = "RestoringSnapshotVsRecomputation";
+      my $program = makeRunString( $name,
+        fromBaseConfig(
+          p => { # parameters
+            size => (join ",", (1,10,100,1000,10000)),
+          },
+          t => 1,
+        ),
+        "benchmarks.restoring.RestoringSnapshotVsRecomputation"
+      );
+      push @runs, {name => $name, program => $program};
+
+      @runs;
+    },
+
+    errorPropagationVsMonadic => sub {
+      my @runs;
+
+      my $name = "errorPropagationVsMonadic";
+      my $program = makeRunString( $name,
+        fromBaseConfig(
+          p => { # parameters
+            engineName => (join ',', "synchron"),
+            size => (join ",", @SIZES),
+          },
+          t => 1,
+        ),
+        "benchmarks.errorprop.MonadicErrors"
+      );
+      push @runs, {name => $name, program => $program};
+
+      @runs;
+    },
+
   };
 }
 
@@ -635,15 +713,15 @@ sub selection {
 sub hhlrjob {
   my ($name, $programstring) = @_;
   return  <<ENDPROGRAM;
-```#!/bin/sh
+#!/bin/sh
 # Job name
 #SBATCH -J REScalaBenchmark
 #
 # File / path where STDOUT will be written, the %.j is the job id
-#SBATCH -o parrp-%j.out
+#SBATCH -o job-%j.out
 #
 # Request the time you need for execution in [hour:]minute
-#SBATCH -t 00:30:00
+#SBATCH -t 00:55:00
 #
 # Required resources
 #SBATCH -C avx&mpi
@@ -659,7 +737,7 @@ sub hhlrjob {
 module unload openmpi
 module load java
 echo "--------- processors ------------------------"
-cat /proc/cpuinfo
+lscpu
 echo "--------- java version ----------------------"
 java -version
 echo "---------------------------------------------"

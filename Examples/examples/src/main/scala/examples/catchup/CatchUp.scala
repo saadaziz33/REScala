@@ -16,7 +16,7 @@ object CatchUp extends SimpleSwingApplication {
   override def main(args: Array[String]): Unit = {
     super.main(args)
     while (true) {
-      Swing onEDTWait {application.tick(())}
+      Swing onEDTWait {application.tick.fire()}
       Thread sleep 50
     }
   }
@@ -48,7 +48,7 @@ class CatchUp {
   val y = Signal {mouseY() + yOffset().toInt}
 
   // Old mouse position, some time ago
-  val mouseDelayed = mouse.position.changed.delay(mouse.position.now,20)
+  val mouseDelayed: Signal[Point] = mouse.position.changed.last(20).map(_.headOption.getOrElse(mouse.position.now))
   val delayedX = Signal {mouseDelayed().getX.toInt}
   val delayedY = Signal {mouseDelayed().getY.toInt}
 
@@ -77,10 +77,10 @@ class CatchUp {
         * Should be replaced once reactive GUI lib is complete
         */
       reactions += {
-        case e: MouseMoved => {CatchUp.this.mouse.mouseMovedE(e.point)}
-        case e: MousePressed => CatchUp.this.mouse.mousePressedE(e.point)
-        case e: MouseDragged => {CatchUp.this.mouse.mouseDraggedE(e.point)}
-        case e: MouseReleased => CatchUp.this.mouse.mouseReleasedE(e.point)
+        case e: MouseMoved => {CatchUp.this.mouse.mouseMovedE.fire(e.point)}
+        case e: MousePressed => CatchUp.this.mouse.mousePressedE.fire(e.point)
+        case e: MouseDragged => {CatchUp.this.mouse.mouseDraggedE.fire(e.point)}
+        case e: MouseReleased => CatchUp.this.mouse.mouseReleasedE.fire(e.point)
       }
 
       preferredSize = new Dimension(Max_X, Max_Y)

@@ -1,0 +1,105 @@
+package rescala.fullmv
+
+import java.util.concurrent.Executor
+
+import rescala.core.{EngineImpl, ReSourciV}
+import rescala.fullmv.tasks._
+
+import scala.concurrent.{ExecutionContext, ExecutionContextExecutor}
+import scala.concurrent.duration._
+import scala.util.Try
+
+class FullMVEngine(val timeout: Duration, val name: String) extends EngineImpl[FullMVStruct, FullMVTurn] {
+  def newTurn(): FullMVTurn = new FullMVTurn(this, Thread.currentThread())
+  val dummy: FullMVTurn = {
+    val dummy = new FullMVTurn(this, null)
+    dummy.phase = TurnPhase.Completed
+    dummy
+  }
+
+  override private[rescala] def singleNow[A](reactive: ReSourciV[A, FullMVStruct]) = reactive.state.latestValue
+
+  override private[rescala] def executeTurn[R](declaredWrites: Traversable[ReSource], admissionPhase: (AdmissionTicket) => R): R = {
+    val turn = newTurn()
+    withTurn(turn) {
+      val setWrites = declaredWrites.toSet // this *should* be part of the interface..
+      if (setWrites.nonEmpty) {
+        // framing phase
+        turn.beginFraming()
+        for (i <- setWrites) turn.pushLocalTask(Framing(turn, i))
+        turn.completeFraming()
+      } else {
+<<<<<<< HEAD
+        turn.beginExecuting()
+=======
+        for (change <- admissionTicket.initialChanges) {
+          val res = change.value
+          val notificationResult = change.source.state.notify(turn, changed = true)
+          assert(notificationResult == GlitchFreeReady)
+          val reevOutResult = change.source.state.reevOut(turn, Some(res))
+          reevOutResult match {
+            case NoSuccessor(out) =>
+              val diff = out.size - 1
+              if (diff != 0) turn.activeBranchDifferential(TurnPhase.Executing, diff)
+              for (succ <- out) threadPool.submit(Notification(turn, succ, changed = true))
+            case FollowFraming(out, succTxn: FullMVTurn) =>
+              val diff = out.size - 1
+              if (diff != 0) turn.activeBranchDifferential(TurnPhase.Executing, diff)
+              for (succ <- out) threadPool.submit(NotificationWithFollowFrame(turn, succ, changed = true, succTxn))
+            case otherwise => throw new AssertionError("Source reevaluation should not be able to yield " + otherwise)
+          }
+        }
+        setWrites.diff(admissionTicket.initialChanges.map(_.source).toSet)
+>>>>>>> master
+      }
+
+      // admission phase
+      val admissionTicket = turn.makeAdmissionPhaseTicket()
+      val admissionResult = Try { admissionPhase(admissionTicket) }
+      if (FullMVEngine.DEBUG) admissionResult match {
+        case scala.util.Failure(e) => e.printStackTrace()
+        case _ =>
+      }
+      assert(turn.localTaskQueue.isEmpty, s"Admission phase left ${turn.localTaskQueue.size()} tasks undone.")
+      assert(turn.externallyPushedTasks.get == Nil, s"Admission phase left ${turn.externallyPushedTasks.get.size} external tasks undone.")
+
+      // propagation phase
+      if (setWrites.nonEmpty) {
+        turn.initialChanges = admissionTicket.initialChanges
+        for(write <- setWrites) {
+          turn.pushLocalTask(SourceNotification(turn, write, admissionResult.isSuccess && admissionTicket.initialChanges.contains(write)))
+        }
+      }
+
+      // wrap-up "phase" (executes in parallel with propagation)
+      val transactionResult = if(admissionTicket.wrapUp == null){
+        admissionResult
+      } else {
+        val wrapUpTicket = turn.makeWrapUpPhaseTicket()
+        admissionResult.map{ i =>
+          // executed in map call so that exceptions in wrapUp make the transaction result a Failure
+          admissionTicket.wrapUp(wrapUpTicket)
+          i
+        }
+      }
+
+      // turn completion
+      turn.completeExecuting()
+
+      // result
+      transactionResult.get
+    }
+  }
+
+  override def toString: String = "Host " + name
+}
+
+object FullMVEngine {
+  val DEBUG = false
+
+  val default = new FullMVEngine(10.seconds, "default")
+
+  val notWorthToMoveToTaskpool: ExecutionContextExecutor = ExecutionContext.fromExecutor(new Executor{
+    override def execute(command: Runnable): Unit = command.run()
+  })
+}

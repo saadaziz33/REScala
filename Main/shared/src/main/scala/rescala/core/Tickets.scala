@@ -31,7 +31,7 @@ final class DynamicTicket[S <: Struct] private[rescala](val creation: Computatio
   private[rescala] var indepsAfter: Set[ReSource[S]] = Set.empty
   private[rescala] var indepsAdded: Set[ReSource[S]] = Set.empty
 
-  private[rescala] def dynamicDepend[A](reactive: ReSourciV[A, S]): A = {
+  private[rescala] def dependDynamic[A](reactive: ReSourciV[A, S]): A = {
     if (indepsBefore(reactive)) {
       indepsAfter += reactive
       creation.staticAfter(reactive)
@@ -46,43 +46,66 @@ final class DynamicTicket[S <: Struct] private[rescala](val creation: Computatio
     }
   }
 
+  private[rescala] def dependStatic[A](reactive: ReSourciV[A, S]): A = {
+    // static dependencies are currently not optimized, for mixed usages
+    dependDynamic(reactive)
+  }
+
   def before[A](reactive: Signal[A, S]): A = {
     creation.dynamicBefore(reactive).get
   }
 
   def depend[A](reactive: Signal[A, S]): A = {
-    dynamicDepend(reactive).get
+    dependDynamic(reactive).get
   }
 
   def depend[A](reactive: Event[A, S]): Option[A] = {
-    dynamicDepend(reactive).toOption
+    dependDynamic(reactive).toOption
+  }
+
+  def staticDepend[A](reactive: Signal[A, S]): A = {
+    dependStatic(reactive).get
+  }
+
+  def staticDepend[A](reactive: Event[A, S]): Option[A] = {
+    dependStatic(reactive).toOption
   }
 
   def indepsRemoved: Set[ReSource[S]] = indepsBefore.diff(indepsAfter)
 }
 
 final class StaticTicket[S <: Struct] private[rescala](val creation: ComputationStateAccess[S] with Creation[S]) extends AnyVal with AnyTicket {
-  private[rescala] def staticBefore[A](reactive: ReSourciV[A, S]): A = {
+  private[rescala]  def staticBefore[A](reactive: ReSourciV[A, S]): A = {
     creation.staticBefore(reactive)
   }
-  private[rescala] def staticDepend[A](reactive: ReSourciV[A, S]): A = {
+  private[rescala] def staticDependPulse[A](reactive: ReSourciV[A, S]): A = {
     creation.staticAfter(reactive)
+  }
+
+  def staticDepend[A](reactive: Signal[A, S]): A = {
+    staticDependPulse(reactive: ReSourciV[Pulse[A], S]).get
+  }
+
+  def staticDepend[A](reactive: Event[A, S]): Option[A] = {
+    staticDependPulse(reactive: ReSourciV[Pulse[A], S]).toOption
   }
 }
 
-trait InitialChange[S <: Struct]{
-  val r: ReSource[S]
-  def v(before: r.Value): ReevaluationResult[r.Value, S]
+
+abstract class InitialChange[S <: Struct]{
+  val source: ReSource[S]
+  def value: source.Value
 }
+
 final class AdmissionTicket[S <: Struct] private[rescala](val creation: ComputationStateAccess[S] with Creation[S]) extends AnyTicket {
 
-  var wrapUp: WrapUpTicket[S] => Unit = null
+  private[rescala] var wrapUp: WrapUpTicket[S] => Unit = null
 
-  val _initialChanges: mutable.Map[ReSource[S], InitialChange[S]] = mutable.HashMap()
-  def initialChanges: collection.Map[ReSource[S], InitialChange[S]] = _initialChanges
-  def recordChange[T](ic: InitialChange[S]): Unit = {
-    assert(!_initialChanges.contains(ic.r), "must not admit same source twice in one turn")
-    _initialChanges.put(ic.r, ic)
+  private val _initialChanges: mutable.Map[ReSource[S], InitialChange[S]] = mutable.HashMap()
+  private[rescala] def initialChanges: collection.Map[ReSource[S], InitialChange[S]] = _initialChanges
+  private[rescala] def recordChange[T](ic: InitialChange[S]): Unit = {
+    assert(!_initialChanges.contains(ic.source), "must not admit same source twice in one turn")
+    _initialChanges.put(ic.source, ic)
   }
   def now[A](reactive: Signal[A, S]): A = {
     creation.dynamicBefore(reactive).get
@@ -110,6 +133,8 @@ final class WrapUpTicket[S <: Struct] private[rescala](val creation: Computation
   " An available implicit Ticket will serve as turn source, or if no" +
   " such turn is present, an implicit Engine is accepted instead.")
 final case class CreationTicket[S <: Struct](self: Either[Creation[S], Engine[S]])(val rename: REName) {
+
+  def isInnerTicket(): Boolean = self.isLeft
 
   def apply[T](f: Creation[S] => T): T = self match {
     case Left(integrated) => f(integrated)

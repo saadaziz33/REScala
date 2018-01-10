@@ -25,7 +25,7 @@ trait RegularReevaluationHandling extends ReevaluationHandling[Reactive[FullMVSt
         ReevaluationResult.Static[Nothing, FullMVStruct](Pulse.NoChange, node.state.incomings).asInstanceOf[ReevaluationResult[node.Value, FullMVStruct]]
     }
     res.commitDependencyDiff(turn, node)
-    processReevaluationResult(res)
+    processReevaluationResult(if(res.valueChanged) Some(res.value) else None)
   }
 
   override def createReevaluation(succTxn: FullMVTurn) = Reevaluation(succTxn, node)
@@ -40,9 +40,9 @@ trait SourceReevaluationHandling extends ReevaluationHandling[ReSource[FullMVStr
     assert(Thread.currentThread() == turn.userlandThread, s"$this on different thread ${Thread.currentThread().getName}")
     assert(turn.phase == TurnPhase.Executing, s"$turn cannot source-reevaluate (requires executing phase")
     val ic = turn.initialChanges(node)
-    assert(ic.r == node, s"$turn initial change map broken?")
-    val res = ic.v(ic.r.state.reevIn(turn)).asInstanceOf[ReevaluationResult[node.Value, FullMVStruct]]
-    processReevaluationResult(res)
+    assert(ic.source == node, s"$turn initial change map broken?")
+    val res = ic.value.asInstanceOf[node.Value]
+    processReevaluationResult(Some(res))
   }
 
   override def createReevaluation(succTxn: FullMVTurn): FullMVAction = SourceReevaluation(succTxn, node)
@@ -53,12 +53,9 @@ trait ReevaluationHandling[N <: ReSource[FullMVStruct]] extends FullMVAction {
   def createReevaluation(succTxn: FullMVTurn): FullMVAction
   def doReevaluation(): Unit
 
-  def processReevaluationResult(res: ReevaluationResult[node.Value, FullMVStruct]): Unit = {
-    if(res.valueChanged) {
-      processReevOutResult(node.state.reevOut(turn, if (res.valueChanged) Some(res.value) else None), changed = true)
-    } else {
-      processReevOutResult(node.state.reevOut(turn, None), changed = false)
-    }
+  def processReevaluationResult(maybeChange: Option[node.Value]): Unit = {
+    val reevOutResult = node.state.reevOut(turn, maybeChange)
+    processReevOutResult(reevOutResult, changed = maybeChange.isDefined)
   }
 
   def processReevOutResult(outAndSucc: ReevOutResult[FullMVTurn, Reactive[FullMVStruct]], changed: Boolean): Unit = {

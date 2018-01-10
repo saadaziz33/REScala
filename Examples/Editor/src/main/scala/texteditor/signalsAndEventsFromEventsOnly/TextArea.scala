@@ -76,7 +76,7 @@ class TextArea extends ReComponent {
     private val dotSignal = Signal {buffer.caret()}
     //#SIG
     def dot = dotSignal
-    def dot_=(value: Int) = buffer.caretChanged(value)
+    def dot_=(value: Int) = buffer.caretChanged.fire(value)
 
     // dot as position (row and column)
     private val dotPosSignal = Signal {LineOffset.position(buffer.iterable(), dot())}
@@ -90,7 +90,7 @@ class TextArea extends ReComponent {
     private val markSignal = Signal {markVar()}
     //#SIG
     def mark = markSignal
-    def mark_=(value: Int) = if (value >= 0 && value <= buffer.length.now) markVar() = value
+    def mark_=(value: Int) = if (value >= 0 && value <= buffer.length.now) markVar set value
 
     // mark as position (row and column)
     private val markPosSignal = Signal {LineOffset.position(buffer.iterable(), mark())}

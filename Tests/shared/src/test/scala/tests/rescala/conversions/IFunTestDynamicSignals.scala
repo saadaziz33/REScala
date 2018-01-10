@@ -57,31 +57,6 @@ class IFunTestDynamicSignals extends RETests {
 
   }
 
-  /* snapshot */
-  allEngines("snapshot the Initial Value Is Set Correctly"){ engine => import engine._
-    val e = Evt[Int]
-    val v1 = Var(1)
-    val s1 = v1.map(_ + 1)
-    val s = e.snapshot(s1)
-
-    assert(s.now == 2)
-  }
-
-  allEngines("snapshot takesA Snapshot When The Event Occurs"){ engine => import engine._
-    val e = Evt[Int]
-    val v1 = Var(1)
-    val s1 = v1.map(_ + 1)
-    val s = e.snapshot(s1)
-
-    e.fire(1)
-    assert(s.now == 2)
-
-    v1.set(2)
-    assert(s.now == 2)
-    e.fire(1)
-    assert(s.now == 3)
-  }
-
   /* delay[T](signal: Signal[T], n: Int): Signal[T] */
 //  allEngines("delay1 the Initial Value Is Set Correctly"){ engine => import engine._
 //    val v1 = Var(1)
@@ -207,43 +182,6 @@ class IFunTestDynamicSignals extends RETests {
     assert(s3.now == 11)
     v2.set(11)
     assert(s3.now == 12)
-  }
-
-  /* change */
-  allEngines("change: is Not Triggered On Creation"){ engine => import engine._
-    var test = 0
-    val v1 = Var(1)
-    val s1 = v1.map(_ + 1)
-    val e = s1.change
-    e += { x => test += 1 }
-
-    assert(test == 0)
-  }
-
-  allEngines("change: is Triggered When The Signal Changes"){ engine => import engine._
-    var test = 0
-    val v1 = Var(1)
-    val s1 = v1.map(_ + 1)
-    val e = s1.change
-    e += { x => test += 1 }
-
-    v1 set 2
-    assert(test == 1)
-    v1 set 3
-    assert(test == 2)
-  }
-
-  allEngines("change: the Value Of The Event Reflects The Change In The Signal"){ engine => import engine._
-    var test = (0, 0)
-    val v1 = Var(1)
-    val s1 = v1.map(_ + 1)
-    val e = s1.change
-    e += { x => test = x.pair }
-
-    v1 set 2
-    assert(test === ((2, 3)))
-    v1 set 3
-    assert(test === ((3, 4)))
   }
 
   /* changed */

@@ -22,7 +22,7 @@ class SaveAction extends Action("Save") {
     if (fileChooser.showDialog(null, "save") == FileChooser.Result.Approve) {
       XML.save(fileChooser.selectedFile.getCanonicalPath,
                Shape.serialize(ReShapes.drawingSpaceState.now.shapes.now))
-      ReShapes.drawingSpaceState.now.fileName() = fileChooser.selectedFile.getName
+      ReShapes.drawingSpaceState.now.fileName set fileChooser.selectedFile.getName
       ReShapes.ui.tabbedPane.pages(ReShapes.ui.tabbedPane.selection.index).title = fileChooser.selectedFile.getName
     }
   }
@@ -38,7 +38,7 @@ class LoadAction extends Action("Load") {
       ReShapes.drawingSpaceState.now.clear.fire()
       for (shape <- Shape.deserialize(XML.loadFile(fileChooser.selectedFile),
                                       ReShapes.drawingSpaceState.now))
-        ReShapes.drawingSpaceState.now execute new CreateShape(shape)
+        ReShapes.drawingSpaceState.now.execute.fire(new CreateShape(shape))
     }
   }
 }

@@ -93,32 +93,32 @@ class DynamicSignalTestSuite extends RETests with Whenever {
 
 
   allEngines("signal Does Not Reevaluate The Expression If Depends On IsUpdated That Is Not In Current Dependencies"){ engine => import engine._
-    val v1 = Var(true)
-    val v2 = Var(0)
-    val v3 = Var(10)
-    var i = 0
-    val s = Signal {
-      i += 1
-      if (v1()) v2() else v3()
+    val condition = Var(true)
+    val ifTrue = Var(0)
+    val ifFalse = Var(10)
+    var reevaluations = 0
+    val s = Signals.dynamic(condition, ifTrue, ifFalse) { (dt: DynamicTicket) =>
+      reevaluations += 1
+      if (dt.depend(condition)) dt.depend(ifTrue) else dt.depend(ifFalse)
     }
 
-    assert(i == 1)
+    assert(reevaluations == 1)
     assert(s.now == 0)
-    v2.set(1)
-    assert(i == 2)
+    ifTrue.set(1)
+    assert(reevaluations == 2)
     assert(s.now == 1)
-    v3.set(11) // No effect
-    assert(i == 2)
+    ifFalse.set(11) // No effect
+    assert(reevaluations == 2)
     assert(s.now == 1)
 
-    v1.set(false)
-    assert(i == 3)
+    condition.set(false)
+    assert(reevaluations == 3)
     assert(s.now == 11)
-    v3.set(12)
-    assert(i == 4)
+    ifFalse.set(12)
+    assert(reevaluations == 4)
     assert(s.now == 12)
-    v2.set(2) // No effect
-    assert(i == 4)
+    ifTrue.set(2) // No effect
+    assert(reevaluations == 4)
     assert(s.now == 12)
   }
 
@@ -190,7 +190,7 @@ class DynamicSignalTestSuite extends RETests with Whenever {
       }
 
       assert(testsig.now === 1)
-      outside() = 2
+      outside set 2
       assert(testsig.now === 2)
     }
   }
@@ -204,7 +204,7 @@ class DynamicSignalTestSuite extends RETests with Whenever {
     val testsig = dynsig.flatten
 
       assert(testsig.now === 1)
-    outside() = 2
+    outside set 2
     assert(testsig.now === 2)
   }
 
@@ -228,17 +228,18 @@ class DynamicSignalTestSuite extends RETests with Whenever {
     val v0 = Var("level 0")
     val v3 = v0.map(_ + "level 1").map(_  + "level 2").map(_ + "level 3")
 
-    val `dynamic signal changing from level 1 to level 4` = Signal {
+    val `dynamic signal changing from level 1 to level 5` = Signal {
       if (v0() == "level 0") v0() else {
         v3.map(_ + "level 4 inner").apply()
       }
     }
-    assert(`dynamic signal changing from level 1 to level 4`.now == "level 0")
-    assertLevel(`dynamic signal changing from level 1 to level 4`, 1)
+    assert(`dynamic signal changing from level 1 to level 5`.now == "level 0")
+    //note: will start with level 5 because of static guess of current level done by the macro expansion
+    assertLevel(`dynamic signal changing from level 1 to level 5`, 5)
 
     v0.set("level0+")
-    assert(`dynamic signal changing from level 1 to level 4`.now == "level0+level 1level 2level 3level 4 inner")
-    assertLevel(`dynamic signal changing from level 1 to level 4`, 5)
+    assert(`dynamic signal changing from level 1 to level 5`.now == "level0+level 1level 2level 3level 4 inner")
+    assertLevel(`dynamic signal changing from level 1 to level 5`, 5)
   }
 
   allEngines("creating signals in signals based on changing signals dynamic"){ engine => import engine._
