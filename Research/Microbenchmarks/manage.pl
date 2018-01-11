@@ -82,7 +82,7 @@ sub init {
   chdir "../..";
 
   system('./sbt', 'set scalacOptions in ThisBuild ++= List("-Xdisable-assertions", "-Xelide-below", "9999999")',
-    'project microbench', 'jmh:compile', 'jmh:stage', 'project universe', 'start-script');
+    'project microbench', 'jmh:compile', 'jmh:stage');
   chdir $MAINDIR;
 }
 
