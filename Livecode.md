@@ -5,4 +5,4 @@ nav: 7
 
 # Live Code
 
-<script src="https://scastie.scala-lang.org/RmryGAD7Ql2ZtwIjbyStKQ.js"></script>
+<script src="https://scastie.scala-lang.org/aJGpxz9MR12Uzab9hbZhWQ.js"></script>
