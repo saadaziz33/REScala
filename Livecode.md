@@ -1,8 +1,8 @@
 ---
 title: Live Code
-nav: 6
+nav: 7
 ---
 
 # Live Code
 
-<script src="https://scastie.scala-lang.org/MAmh54e9RbqoGtnAUUc30g.js"> </script>
+<script src="https://scastie.scala-lang.org/RmryGAD7Ql2ZtwIjbyStKQ.js"></script>
